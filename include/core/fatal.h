@@ -18,8 +18,11 @@ template<size_t N>
 
 } // namespace nlx::fatal
 
+namespace nlx::fatal
+{
+
 template<size_t N>
-void nlx::fatal::fatal(const char (&message)[N]) noexcept
+void fatal(const char (&message)[N]) noexcept
 {
     static_assert(N > 1);
 
@@ -44,5 +47,6 @@ void nlx::fatal::fatal(const char (&message)[N]) noexcept
     std::terminate();
 }
 
+} // namespace nlx::fatal
 #endif // !NLX_CORE_FATAL_H
 

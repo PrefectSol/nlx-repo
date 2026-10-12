@@ -98,7 +98,7 @@ FileDescriptor FileDescriptor::make_eventfd(bool nonblocking)
     return FileDescriptor(fd);
 }
 
-FileDescriptor FileDescriptor::make_timerfd(nlx::milliseconds interval, bool nonblocking)
+FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, bool nonblocking)
 {
     const int flags = TFD_CLOEXEC | (nonblocking ? TFD_NONBLOCK : 0);
     const int fd = ::timerfd_create(CLOCK_MONOTONIC, flags);
@@ -260,11 +260,16 @@ uint64_t drain(const FileDescriptor &fd) noexcept
 
 bool writeTo(const FileDescriptor &fd, const char *data, size_t size) noexcept
 {
+    if (!fd.valid() || data == nullptr || size == 0) [[unlikely]]
+    {
+        return false;
+    }
+
     size_t offset = 0;
     while (offset < size)
     {
         const ssize_t result = ::write(fd.get(), data + offset, size - offset);
-        if (result < 0) [[unlikely]]
+        if (result <= 0) [[unlikely]]
         {
             if (errno == EINTR)
             {

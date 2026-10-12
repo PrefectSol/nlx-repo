@@ -75,8 +75,11 @@ private:
 
 } // namespace nlx
 
+namespace nlx 
+{
+
 template<typename T, size_t Capacity>
-bool nlx::SpscQueue<T, Capacity>::push(const T &item) noexcept
+bool SpscQueue<T, Capacity>::push(const T &item) noexcept
 {
     if (m_producer.pending) [[unlikely]]
     {
@@ -100,7 +103,7 @@ bool nlx::SpscQueue<T, Capacity>::push(const T &item) noexcept
 }
 
 template<typename T, size_t Capacity>
-bool nlx::SpscQueue<T, Capacity>::pop(T &item) noexcept
+bool SpscQueue<T, Capacity>::pop(T &item) noexcept
 {
     if (m_consumer.pending) [[unlikely]]
     {
@@ -124,7 +127,7 @@ bool nlx::SpscQueue<T, Capacity>::pop(T &item) noexcept
 }
 
 template<typename T, size_t Capacity>
-size_t nlx::SpscQueue<T, Capacity>::push(const T *items, size_t size) noexcept
+size_t SpscQueue<T, Capacity>::push(const T *items, size_t size) noexcept
 {
     if (items == nullptr || size == 0) [[unlikely]]
     {
@@ -167,7 +170,7 @@ size_t nlx::SpscQueue<T, Capacity>::push(const T *items, size_t size) noexcept
 }
 
 template<typename T, size_t Capacity>
-size_t nlx::SpscQueue<T, Capacity>::pop(T *items, size_t size) noexcept
+size_t SpscQueue<T, Capacity>::pop(T *items, size_t size) noexcept
 {
     if (items == nullptr || size == 0) [[unlikely]]
     {
@@ -210,7 +213,7 @@ size_t nlx::SpscQueue<T, Capacity>::pop(T *items, size_t size) noexcept
 }
 
 template<typename T, size_t Capacity>
-T *nlx::SpscQueue<T, Capacity>::claim() noexcept
+T *SpscQueue<T, Capacity>::claim() noexcept
 {
     if (m_producer.pending) [[unlikely]]
     {
@@ -233,7 +236,7 @@ T *nlx::SpscQueue<T, Capacity>::claim() noexcept
 }
 
 template<typename T, size_t Capacity>
-bool nlx::SpscQueue<T, Capacity>::commit() noexcept
+bool SpscQueue<T, Capacity>::commit() noexcept
 {
     if (!m_producer.pending) [[unlikely]]
     {
@@ -248,7 +251,7 @@ bool nlx::SpscQueue<T, Capacity>::commit() noexcept
 }
 
 template<typename T, size_t Capacity>
-const T *nlx::SpscQueue<T, Capacity>::front() noexcept
+const T *SpscQueue<T, Capacity>::front() noexcept
 {
     if (m_consumer.pending) [[unlikely]]
     {
@@ -271,7 +274,7 @@ const T *nlx::SpscQueue<T, Capacity>::front() noexcept
 }
 
 template<typename T, size_t Capacity>
-bool nlx::SpscQueue<T, Capacity>::consume() noexcept
+bool SpscQueue<T, Capacity>::consume() noexcept
 {
     if (!m_consumer.pending) [[unlikely]]
     {
@@ -286,7 +289,7 @@ bool nlx::SpscQueue<T, Capacity>::consume() noexcept
 }
 
 template<typename T, size_t Capacity>
-bool nlx::SpscQueue<T, Capacity>::empty_approx() const noexcept
+bool SpscQueue<T, Capacity>::empty_approx() const noexcept
 {
     const size_t consumer = m_consumer.index.load(std::memory_order_relaxed);
     const size_t producer = m_producer.index.load(std::memory_order_relaxed);
@@ -295,7 +298,7 @@ bool nlx::SpscQueue<T, Capacity>::empty_approx() const noexcept
 }
 
 template<typename T, size_t Capacity>
-size_t nlx::SpscQueue<T, Capacity>::size_approx() const noexcept
+size_t SpscQueue<T, Capacity>::size_approx() const noexcept
 {
     const size_t consumer = m_consumer.index.load(std::memory_order_relaxed);
     const size_t producer = m_producer.index.load(std::memory_order_relaxed);
@@ -304,9 +307,10 @@ size_t nlx::SpscQueue<T, Capacity>::size_approx() const noexcept
 }
 
 template<typename T, size_t Capacity>
-constexpr size_t nlx::SpscQueue<T, Capacity>::capacity() noexcept
+constexpr size_t SpscQueue<T, Capacity>::capacity() noexcept
 {
     return Capacity;
 }
 
+} // namespace nlx
 #endif // !NLX_CORE_SPSC_QUEUE_H

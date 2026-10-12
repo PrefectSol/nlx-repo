@@ -22,7 +22,7 @@ namespace nlx::logging
 namespace 
 {
 
-constexpr std::string_view level_name(LogLevel level) noexcept
+constexpr std::string_view level_nameblock(LogLevel level) noexcept
 {
     switch (level)
     {
@@ -58,19 +58,6 @@ constexpr bool validate_name(std::string_view name) noexcept
     }
 
     return true;
-}
-
-template<size_t N, typename T>
-    requires std::integral<T> || std::floating_point<T>
-std::string_view num2string(char (&buffer)[N], T value) noexcept
-{
-    const auto result = std::to_chars(buffer, buffer + N, value);
-    if (result.ec != std::errc()) [[unlikely]]
-    {
-        return {};
-    }
-
-    return std::string_view(buffer, static_cast<size_t>(result.ptr - buffer));
 }
 
 } // namespace
@@ -213,7 +200,7 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
     line.append("[");
     line.append(nlx::detail::format_time(datebuffer, kDateFormat, record.timestamp));
     line.append("] ");
-    line.append(level_name(record.level));
+    line.append(level_nameblock(record.level));
 
     const std::string_view format(record.format, record.size);
     const size_t size = format.size();
@@ -232,33 +219,32 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
 
         if (ch == '{' && format[i + 1] == '}')
         {
-            const LogArgument::Value &value = record.values[index];
-
             line.append("\"");
 
-            char numbuffer[kNumSize];
+            const LogArgument::Value &value = record.values[index];
             switch (record.types[index])
             {
                 case LogArgument::Type::Integer:
-                    line.append(num2string(numbuffer, value.as_int));
+                    line.append( value.as_int);
                     break;
+
                 case LogArgument::Type::UInteger:
-                    line.append(num2string(numbuffer, value.as_uint));
+                    line.append(value.as_uint);
                     break;
+
                 case LogArgument::Type::Floating:
-                    line.append(num2string(numbuffer, value.as_double));
+                    line.append(value.as_double);
                     break;
+
                 case LogArgument::Type::Boolean:
                     line.append(value.as_bool ? "true" : "false");
                     break;
+
                 case LogArgument::Type::String:
                     line.append(std::string_view(record.buffer + value.as_string.offset, value.as_string.length));
-                    if (value.as_string.truncated) [[unlikely]]
-                    {
-                        line.append(kTruncatedMarker);
-                    }
-
+                    line.append((value.as_string.truncated ? kTruncatedMarker : ""));
                     break;
+
                 case LogArgument::Type::None:
                     break;
             }
@@ -283,23 +269,14 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
 
 void Logger::write_dropped(const Module &module, size_t dropped) noexcept
 {
-    constexpr size_t size = nlx::detail::length_dateformat(kDateFormat);
-    constexpr std::array<char, size> placeholder = []()  {
-        std::array<char, size> array;
-        array.fill(kPlaceholder);
-        return array;
-    }();
-    
-    char numbuffer[kNumSize];
-
     string::BoundedLine<kLineSize> line;
     
     line.append("[");
-    line.append(std::string_view(placeholder.data(), size));
+    line.append(kPlaceholder);
     line.append("]");
-    line.append(level_name(LogLevel::Warning));
+    line.append(level_nameblock(LogLevel::Warning));
     line.append("dropped records: ");
-    line.append(num2string(numbuffer, dropped));
+    line.append(dropped);
 
     const std::string_view text = line.finish();
     append(module, text.data(), text.size());

@@ -37,12 +37,13 @@ private:
 
     static constexpr char kRotationFormat[] = "{:%Y%m%d-%H%M}";
     static constexpr char kDateFormat[] = "{:%F %T}";
-    static constexpr char kPlaceholder = '-';
+    static constexpr char kPlaceholder[] = "-----------------------------";
     static constexpr char kTruncatedMarker[] = "[truncated]";
     static constexpr char kFileExtension[] = ".log";
     
-    static constexpr size_t kNumSize = 32;
     static constexpr size_t kLineSize = 4096;
+
+    static_assert(sizeof(kPlaceholder) - 1 == nlx::detail::length_dateformat(kDateFormat));
     
     struct Module
     {

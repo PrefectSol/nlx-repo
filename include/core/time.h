@@ -27,7 +27,7 @@ namespace detail
 
 template<size_t N>
 [[nodiscard]] std::string_view format_time(char (&buffer)[N], 
-                                           std::format_string<const std::chrono::sys_time<nanoseconds>&> format,
+                                           std::format_string<const std::chrono::sys_time<nanoseconds> &> format,
                                            nanoseconds timestamp) noexcept;
 
 [[nodiscard]] constexpr itimerspec to_itimerspec(milliseconds interval) noexcept;
@@ -35,20 +35,23 @@ template<size_t N>
 } // namespace nlx::detail
 } // namespace nlx
 
-template<size_t N>
-std::string_view nlx::detail::format_time(char (&buffer)[N],
-                                          std::format_string<const std::chrono::sys_time<nanoseconds>&> format,
-                                          nlx::nanoseconds timestamp) noexcept
+namespace nlx::detail
 {
-    const std::chrono::sys_time<std::chrono::nanoseconds> point_nano(timestamp);
 
-    const auto result = std::format_to_n(buffer, N - 1, format, point_nano);
+template<size_t N>
+std::string_view format_time(char (&buffer)[N],
+                             std::format_string<const std::chrono::sys_time<nanoseconds> &> format,
+                             nanoseconds timestamp) noexcept
+{
+    const std::chrono::sys_time<std::chrono::nanoseconds> point(timestamp);
+
+    const auto result = std::format_to_n(buffer, N - 1, format, point);
     *result.out = '\0';
     
     return { buffer, static_cast<size_t>(result.out - buffer) };
 }
 
-constexpr itimerspec nlx::detail::to_itimerspec(milliseconds interval) noexcept
+constexpr itimerspec to_itimerspec(milliseconds interval) noexcept
 {
     const auto secs = std::chrono::duration_cast<std::chrono::seconds>(interval);
     const auto nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(interval - secs);
@@ -61,5 +64,6 @@ constexpr itimerspec nlx::detail::to_itimerspec(milliseconds interval) noexcept
     return spec;
 }
 
+} // namespace nlx::detail
 #endif // !NLX_CORE_TIME_H
 

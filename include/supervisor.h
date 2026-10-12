@@ -23,7 +23,7 @@ public:
     Supervisor &operator=(Supervisor &&) = delete;
 
     [[nodiscard]] int start();
-    void request_stop() noexcept;
+    void request_stop();
 
 private:
     Config m_config;

@@ -44,7 +44,7 @@ Supervisor::Supervisor(Config config) :
     m_epoll = FileDescriptor::make_epoll();
     m_signals = FileDescriptor::make_signalfd({ SIGINT, SIGTERM }, true);
     
-    nlx::detail::epoll_add(m_epoll, m_signals);
+    detail::epoll_add(m_epoll, m_signals);
 }
 
 Supervisor::~Supervisor()
@@ -54,8 +54,12 @@ Supervisor::~Supervisor()
 
 int Supervisor::start()
 {
-    m_running.store(true, std::memory_order_release);
-    
+    bool expected = false;
+    if (!m_running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    {
+        return -1;
+    }
+
     m_logger_thread = std::thread([this] { m_logger.run(); });
 
     m_log.log("supervisor started");
@@ -68,13 +72,13 @@ int Supervisor::start()
     epoll_event event{};
     while (true)
     {
-        const size_t count = nlx::detail::epoll_wait(m_epoll, { &event, 1 }, -1);
+        const size_t count = detail::epoll_wait(m_epoll, { &event, 1 }, -1);
         if (count == 0)
         {
             continue;
         }
 
-        const int signo = nlx::detail::receive(m_signals);
+        const int signo = detail::receive(m_signals);
         if (signo == SIGINT || signo == SIGTERM)
         {
             m_log.log<logging::LogLevel::Warning>("received signal {}", signo_name(signo));
@@ -88,7 +92,7 @@ int Supervisor::start()
     return 0;
 }
 
-void Supervisor::request_stop() noexcept
+void Supervisor::request_stop()
 {
     m_running.store(false, std::memory_order_release);
     

@@ -30,7 +30,7 @@ public:
 
     [[nodiscard]] static FileDescriptor make_epoll();
     [[nodiscard]] static FileDescriptor make_eventfd(bool nonblocking = true);
-    [[nodiscard]] static FileDescriptor make_timerfd(nlx::milliseconds interval, bool nonblocking = true);
+    [[nodiscard]] static FileDescriptor make_timerfd(milliseconds interval, bool nonblocking = true);
     [[nodiscard]] static FileDescriptor make_signalfd(std::initializer_list<int> signals, bool nonblocking = true);
     [[nodiscard]] static FileDescriptor open_append(const char *path) noexcept;
 

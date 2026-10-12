@@ -19,9 +19,10 @@ namespace
 
 using stat_t = struct stat;
 
-bool make_dir(const char *path, mode_t mode)
+bool make_dir(const char *path, mode_t mode) noexcept
 {
-    if (::mkdir(path, mode) == 0)
+    int result = ::mkdir(path, mode);
+    if (result == 0)
     {
         return true;
     }
@@ -32,7 +33,8 @@ bool make_dir(const char *path, mode_t mode)
     }
 
     stat_t st;
-    if (::stat(path, &st) != 0)
+    result = ::stat(path, &st);
+    if (result != 0)
     {
         return false;
     }
@@ -92,13 +94,16 @@ bool writable(const char *path) noexcept
         ::close(fd);
         return true;
     }
-
-    if (errno != EOPNOTSUPP && errno != EISDIR)
+    
+    const int error = errno;
+    if (error != EOPNOTSUPP && error != EISDIR)
     {
         return false;
     }
 
-    return ::access(path, W_OK | X_OK) == 0;
+    const int result = ::access(path, W_OK | X_OK);
+    
+    return result == 0;
 }
 
 } // namespace nlx::file
