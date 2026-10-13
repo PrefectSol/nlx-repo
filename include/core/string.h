@@ -7,6 +7,7 @@
 #include <cstring>
 #include <algorithm> 
 #include <charconv>
+#include <concepts>
 
 namespace nlx::string 
 {

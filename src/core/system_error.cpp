@@ -1,5 +1,7 @@
 #include "core/system_error.h"
 
+#include <cerrno>
+
 namespace nlx
 {
 
