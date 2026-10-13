@@ -22,13 +22,13 @@ public:
     Supervisor(Supervisor &&) = delete;
     Supervisor &operator=(Supervisor &&) = delete;
 
-    [[nodiscard]] int start();
-    void request_stop();
+    [[nodiscard]] int run();
+    void request_stop() noexcept;
 
 private:
     Config m_config;
 
-    std::atomic<bool> m_running;
+    std::atomic<bool> m_started;
 
     logging::Logger m_logger;
     logging::LoggerNode m_log;
@@ -37,6 +37,7 @@ private:
 
     FileDescriptor m_epoll;
     FileDescriptor m_signals;
+    FileDescriptor m_stop;
 };
 
 } // namespace nlx

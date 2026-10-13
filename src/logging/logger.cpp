@@ -27,16 +27,16 @@ constexpr std::string_view level_nameblock(LogLevel level) noexcept
     switch (level)
     {
         case LogLevel::Debug:
-            return "[DEBUG]   ";
+            return "[DEBUG]  ";
         case LogLevel::Info:
-            return "[INFO]    ";
+            return "[INFO]   ";
         case LogLevel::Warning:
-            return "[WARNING] ";
+            return "[WARNING]";
         case LogLevel::Error:
-            return "[ERROR]   ";
+            return "[ERROR]  ";
     }
 
-    __builtin_unreachable();
+    std::unreachable();
 }
 
 constexpr bool validate_name(std::string_view name) noexcept
@@ -79,7 +79,7 @@ Logger::Logger(LoggerConfig config) :
 
     if (!file::mkdir_p(m_config.directory))
     {
-        throw std::runtime_error("failed to create directory");
+        throw SystemError("failed to create directory");
     }
     
     if (!file::writable(m_config.directory))
@@ -139,7 +139,7 @@ void Logger::run() noexcept
     drain_modules();
 }
 
-void Logger::wake() noexcept
+void Logger::request_stop() noexcept
 {
     m_running.store(false, std::memory_order_release);
     nlx::detail::notify(m_notify);
@@ -192,15 +192,15 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
         rotate(module, record.timestamp);
     }
 
-    string::BoundedLine<kLineSize> line;
-    
-    constexpr size_t datesize = nlx::detail::length_dateformat(kDateFormat) + 1;
-    char datebuffer[datesize];
+    char date_buffer[kDateSize];
+    const std::string_view date = nlx::detail::format_time(date_buffer, kDateFormat, record.timestamp);
 
+    string::BoundedLine<kLineSize> line;
     line.append("[");
-    line.append(nlx::detail::format_time(datebuffer, kDateFormat, record.timestamp));
+    line.append(date);
     line.append("] ");
     line.append(level_nameblock(record.level));
+    line.append(" ");
 
     const std::string_view format(record.format, record.size);
     const size_t size = format.size();
@@ -237,7 +237,7 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
                     break;
 
                 case LogArgument::Type::Boolean:
-                    line.append(value.as_bool ? "true" : "false");
+                    line.append(value.as_bool);
                     break;
 
                 case LogArgument::Type::String:
@@ -269,13 +269,15 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
 
 void Logger::write_dropped(const Module &module, size_t dropped) noexcept
 {
-    string::BoundedLine<kLineSize> line;
+    char date_buffer[kDateSize];
+    const std::string_view date = nlx::detail::format_time(date_buffer, kDateFormat, time::now());
     
+    string::BoundedLine<kLineSize> line;
     line.append("[");
-    line.append(kPlaceholder);
-    line.append("]");
+    line.append(date);
+    line.append("] ");
     line.append(level_nameblock(LogLevel::Warning));
-    line.append("dropped records: ");
+    line.append(" dropped records: ");
     line.append(dropped);
 
     const std::string_view text = line.finish();
@@ -286,10 +288,8 @@ void Logger::rotate(Module &module, nanoseconds timestamp) noexcept
 {
     module.rotation = timestamp - timestamp % minutes(m_config.rotation_minutes);
 
-    constexpr size_t size = nlx::detail::length_dateformat(kRotationFormat) + 1;
-    char buffer[size]; 
-    
-    const std::string_view date = nlx::detail::format_time(buffer, kRotationFormat, module.rotation);
+    char date_buffer[kDateSize]; 
+    const std::string_view date = nlx::detail::format_time(date_buffer, kRotationFormat, module.rotation);
     
     char path[PATH_MAX];
     const auto result = std::format_to_n(path, sizeof(path) - 1, "{}/{}_{}{}", m_config.directory, date, module.name, kFileExtension);
@@ -312,26 +312,6 @@ void Logger::append(const Module &module, const char *data, size_t size) noexcep
     if (!nlx::detail::writeTo(module.file, data, size)) [[unlikely]]
     {
         NLX_FATAL("nlx::logging::Logger::append() detail::writeTo failed");
-    }
-
-    if (m_config.console)
-    {
-        size_t offset = 0;
-        while (offset < size)
-        {
-            const ssize_t result = ::write(STDOUT_FILENO, data + offset, size - offset);
-            if (result < 0) [[unlikely]]
-            {
-                if (errno == EINTR)
-                {
-                    continue;
-                }
-
-                break; 
-            }
-
-            offset += static_cast<size_t>(result);
-        }
     }
 }
 

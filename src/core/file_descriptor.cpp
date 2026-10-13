@@ -260,18 +260,13 @@ uint64_t drain(const FileDescriptor &fd) noexcept
 
 bool writeTo(const FileDescriptor &fd, const char *data, size_t size) noexcept
 {
-    if (!fd.valid() || data == nullptr || size == 0) [[unlikely]]
-    {
-        return false;
-    }
-
     size_t offset = 0;
     while (offset < size)
     {
         const ssize_t result = ::write(fd.get(), data + offset, size - offset);
         if (result <= 0) [[unlikely]]
         {
-            if (errno == EINTR)
+            if (result < 0 && errno == EINTR)
             {
                 continue;
             }

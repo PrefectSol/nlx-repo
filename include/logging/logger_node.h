@@ -66,9 +66,7 @@ struct alignas(64) LogRecord
     const char *format;
     uint32_t size;
     
-    uint8_t nargs;
     uint8_t used;
-    
     LogLevel level;
 
     LogArgument::Value values[kMaxArgs];
@@ -126,10 +124,8 @@ private:
 namespace detail
 {
 
-template<std::integral T>
-constexpr void make_arg(LogRecord &record, size_t index, T value) noexcept;
-
-template<std::floating_point T>
+template<typename T>
+    requires std::integral<T> || std::floating_point<T>
 constexpr void make_arg(LogRecord &record, size_t index, T value) noexcept;
 
 constexpr void make_arg(LogRecord &record, size_t index, std::string_view value) noexcept;
@@ -170,7 +166,6 @@ void LoggerNode::log(FormatString<Args...> format, Args &&...args) noexcept
     record->format = view.data();
     record->size = static_cast<uint32_t>(view.size());
     record->level = Level;
-    record->nargs = static_cast<uint8_t>(sizeof...(Args));
     record->used = 0;
 
     [[maybe_unused]] size_t idx = 0;
@@ -189,13 +184,19 @@ void LoggerNode::log(FormatString<Args...> format, Args &&...args) noexcept
 namespace detail
 {
 
-template<std::integral T>
+template<typename T>
+    requires std::integral<T> || std::floating_point<T>
 constexpr void make_arg(LogRecord &record, size_t index, T value) noexcept
 {
-    if constexpr (std::is_same_v<std::remove_cv_t<T>, bool>)
+    if constexpr (std::is_same_v<T, bool>)
     {
         record.types[index] = LogArgument::Type::Boolean;
         record.values[index].as_bool = value;
+    }
+    else if constexpr (std::is_floating_point_v<T>)
+    {
+        record.types[index] = LogArgument::Type::Floating;
+        record.values[index].as_double = static_cast<double>(value);
     }
     else if constexpr (std::is_signed_v<T>)
     {
@@ -207,13 +208,6 @@ constexpr void make_arg(LogRecord &record, size_t index, T value) noexcept
         record.types[index] = LogArgument::Type::UInteger;
         record.values[index].as_uint = static_cast<uint64_t>(value);
     }
-}
-
-template<std::floating_point T>
-constexpr void make_arg(LogRecord &record, size_t index, T value) noexcept
-{
-    record.types[index] = LogArgument::Type::Floating;
-    record.values[index].as_double = static_cast<double>(value);
 }
 
 constexpr void make_arg(LogRecord &record, size_t index, std::string_view value) noexcept
@@ -232,7 +226,7 @@ constexpr void make_arg(LogRecord &record, size_t index, std::string_view value)
 
 constexpr void make_arg(LogRecord &record, size_t index, const char *value) noexcept
 {
-    make_arg(record, index, value != nullptr ? std::string_view(value) : std::string_view("(null)"));
+    make_arg(record, index, value != nullptr ? std::string_view(value) : std::string_view("(nullptr)"));
 }
 
 constexpr void make_arg(LogRecord &record, size_t index, char value) noexcept

@@ -11,6 +11,7 @@ class SystemError : public std::system_error
 {
 public:
     explicit SystemError(std::string message);
+    explicit SystemError(int error, std::string message);
 
 private:
     [[nodiscard]] static int capture_errno() noexcept;

@@ -1,5 +1,7 @@
 #include "supervisor.h"
+#include "core/file_descriptor.h"
 #include "logging/logger_registry.h"
+#include "core/system_error.h"
 
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
@@ -31,42 +33,54 @@ constexpr std::string_view signo_name(int signo) noexcept
 
 Supervisor::Supervisor(Config config) :
     m_config(std::move(config)),
-    m_running(false),
+    m_started(false),
     m_logger(m_config.logger),
     m_log(),
     m_logger_thread(),
     m_epoll(),
-    m_signals()
+    m_signals(),
+    m_stop()
 {
     logging::LoggerRegistry registry(m_logger);
     m_log = registry.create_node("supervisor");
     
     m_epoll = FileDescriptor::make_epoll();
     m_signals = FileDescriptor::make_signalfd({ SIGINT, SIGTERM }, true);
-    
+    m_stop = FileDescriptor::make_eventfd(true);
+
+    const sighandler_t result = ::signal(SIGPIPE, SIG_IGN);
+    if (result == SIG_ERR) [[unlikely]]
+    {
+        throw SystemError("signal failed");
+    }
+
     detail::epoll_add(m_epoll, m_signals);
+    detail::epoll_add(m_epoll, m_stop);
 }
 
 Supervisor::~Supervisor()
 {
-    request_stop();
+    if (m_logger_thread.joinable())
+    {
+        m_logger.request_stop();
+        m_logger_thread.join();
+    }
 }
 
-int Supervisor::start()
+int Supervisor::run()
 {
     bool expected = false;
-    if (!m_running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    if (!m_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
     {
         return -1;
     }
 
     m_logger_thread = std::thread([this] { m_logger.run(); });
-
+    
     m_log.log("supervisor started");
     m_log.log("logger directory = {}", m_config.logger.directory);
     m_log.log("logger rotation minutes = {}", m_config.logger.rotation_minutes);
     m_log.log("logger flush ms = {}", m_config.logger.flush_ms);
-    m_log.log("logger console = {}", m_config.logger.console);
     m_log.flush();
 
     epoll_event event{};
@@ -76,6 +90,13 @@ int Supervisor::start()
         if (count == 0)
         {
             continue;
+        }
+
+        if (event.data.fd == m_stop.get())
+        {
+            [[maybe_unused]] const uint64_t result = detail::drain(m_stop);
+            m_log.log<logging::LogLevel::Warning>("stop requested");
+            break;
         }
 
         const int signo = detail::receive(m_signals);
@@ -92,15 +113,9 @@ int Supervisor::start()
     return 0;
 }
 
-void Supervisor::request_stop()
+void Supervisor::request_stop() noexcept
 {
-    m_running.store(false, std::memory_order_release);
-    
-    if (m_logger_thread.joinable())
-    {
-        m_logger.wake();
-        m_logger_thread.join();
-    }
+    detail::notify(m_stop); 
 }
 
 } // namespace nlx

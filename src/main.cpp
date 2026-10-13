@@ -24,13 +24,12 @@ int main(int argc, const char *argv[])
         }
 
         std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(std::move(config));
-        return supervisor->start();
+        return supervisor->run();
     }
     catch (const std::exception &exp)
     {
-        std::cerr << "exception:\n" << exp.what() << std::endl;
+        std::cerr << "error:\n" << exp.what() << std::endl;
     }
 
     return 1;
 }
-

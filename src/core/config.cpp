@@ -12,7 +12,6 @@ Config::Config() :
     detail::str_assign(logger.directory, "logs"); 
     logger.rotation_minutes = 1440;
     logger.flush_ms = 250;
-    logger.console = true;
 }
 
 Config Config::load(std::string_view path)

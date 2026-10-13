@@ -11,7 +11,6 @@ struct LoggerConfig
     char directory[128];
     int rotation_minutes;
     int flush_ms;
-    bool console;
 };
 
 class Config

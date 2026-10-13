@@ -21,6 +21,8 @@ public:
     BoundedLine() noexcept;
 
     void append(std::string_view text) noexcept;
+    void append(const char *text) noexcept;
+    void append(char ch) noexcept;
 
     template <typename T>
         requires std::integral<T> || std::floating_point<T>
@@ -58,11 +60,6 @@ namespace nlx::detail
 
 template <size_t N>
 constexpr void str_assign(char (&dest)[N], std::string_view src) noexcept;
-
-[[nodiscard]] consteval size_t sizeof_dateformat(std::string_view format) noexcept;
-
-template<size_t N>
-[[nodiscard]] consteval size_t length_dateformat(const char (&format)[N]) noexcept;
 
 void format_error(const char *message) noexcept;
 [[nodiscard]] consteval size_t count_placeholders(std::string_view format) noexcept;
@@ -127,21 +124,40 @@ template <typename T>
     requires std::integral<T> || std::floating_point<T>
 void BoundedLine<Capacity>::append(T value) noexcept
 {
-    if (m_size >= Capacity) [[unlikely]]
+    if constexpr (std::is_same_v<T, bool>)
     {
-        m_overflow = true;
-        return;
+        append(value ? std::string_view("true") : std::string_view("false"));
     }
+    else
+    {
+        if (m_size >= Capacity) [[unlikely]]
+        {
+            m_overflow = true;
+            return;
+        }
 
-    const size_t available = Capacity - m_size;
-    const auto result = std::to_chars(m_data + m_size, m_data + m_size + available, value);
-    if (result.ec != std::errc()) [[unlikely]]
-    {
-        m_overflow = true;
-        return;
+        const size_t available = Capacity - m_size;
+        const auto result = std::to_chars(m_data + m_size, m_data + m_size + available, value);
+        if (result.ec != std::errc()) [[unlikely]]
+        {
+            m_overflow = true;
+            return;
+        }
+
+        m_size += static_cast<size_t>(result.ptr - (m_data + m_size));
     }
-        
-    m_size += static_cast<size_t>(result.ptr - (m_data + m_size));
+}
+
+template <size_t Capacity>
+void BoundedLine<Capacity>::append(const char *text) noexcept
+{
+    append(text != nullptr ? std::string_view(text) : std::string_view("(null)"));
+}
+
+template <size_t Capacity>
+void BoundedLine<Capacity>::append(char ch) noexcept
+{
+    append(std::string_view(&ch, 1));
 }
 
 template <size_t Capacity>
@@ -193,86 +209,6 @@ constexpr void str_assign(char (&dest)[N], std::string_view src) noexcept
 {
     [[maybe_unused]] const bool result = string::safe_strcpy(dest, src);
     assert(result);
-}
-
-consteval size_t sizeof_dateformat(std::string_view format) noexcept
-{
-    size_t count = 0;
-
-    const size_t size = format.size();
-    for (size_t i = 0; i < size; ++i)
-    {
-        if (format[i] != '%')
-        {
-            ++count;
-            continue;
-        }
-
-        ++i;
-        if (i >= size)    
-        {
-            break;
-        }
-        
-        if (format[i] == 'E' || format[i] == 'O')
-        {
-            ++i;
-            if (i >= size)
-            {
-                break;
-            }
-        }
-
-        switch (format[i])
-        {
-            case 'F': count += 10; break;
-            case 'T': count += 18; break;
-            case 'R': count += 5;  break;
-            case 'r': count += 11; break;
-            case 'D': count += 8;  break;
-            case 'Y': count += 4;  break;
-            case 'y': count += 2;  break;
-            case 'C': count += 2;  break;
-            case 'm': count += 2;  break;
-            case 'b':
-            case 'h': count += 3;  break;
-            case 'B': count += 9;  break;
-            case 'd':
-            case 'e': count += 2;  break;
-            case 'a': count += 3;  break;
-            case 'A': count += 9;  break;
-            case 'w':
-            case 'u': count += 1;  break;
-            case 'H':
-            case 'I': count += 2;  break;
-            case 'M': count += 2;  break;
-            case 'S': count += 2;  break;
-            case 'p': count += 2;  break;
-            case 'j': count += 3;  break;
-            case 'U': 
-            case 'W':
-            case 'V': count += 2;  break;
-            case 'G': count += 4;  break;
-            case 'g': count += 2;  break;
-            case 'z': count += 6;  break;
-            case 'Z': count += 6;  break;
-            case 'n':
-            case 't': count += 1;  break;
-            case '%': count += 1;  break;
-            default:  count += 16; break;
-        }
-    }
-
-    return count;
-}
-
-template<size_t N>
-consteval size_t length_dateformat(const char (&format)[N]) noexcept
-{
-    static_assert(N > 5);
-
-    const std::string_view date = std::string_view(format).substr(2, N - 4);
-    return sizeof_dateformat(date);
 }
 
 consteval size_t count_placeholders(std::string_view format) noexcept
