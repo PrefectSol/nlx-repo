@@ -1,31 +1,40 @@
 # NLX-REPO
 ## server implementation
 
-### requirements
+### system requirements
  - linux
  - cpu (optional)
- - gcc11+
- - cxx20
+ - g++-13+
+ - cxx_std_23
+ - internet access
 
 ### build
 ```bash
-cmake .
-make
+cmake -B build -DCMAKE_CXX_COMPILER=/usr/bin/g++-13 -DCMAKE_BUILD_TYPE=Release
+```
+
+```bash
+cmake --build build -j$(nproc)
 ```
 
 ### usage 
- - default configuration from `src/core/config.cpp`
+default configuration from `src/core/config.cpp`
 ```bash
-./bin/supervisor
+./build/bin/supervisor
 ```
 
- - custom configuration from `data/default.cfg`
+custom configuration from `data/default.cfg`
 ```bash
-./bin/supervisor ./data/default.cfg
+./build/bin/supervisor ./data/default.cfg
 ```
 
 ### tools
- - cpu isolation:
+cpu cores isolation:
  ```bash
-sudo sh ./scripts/cpu_isolate.sh 
+sudo sh ./scripts/isolate_cpu.sh
+```
+
+update ca bundle:
+```bash
+sh ./scripts/update_certs.sh ./certs/cacert.pem 
 ```
