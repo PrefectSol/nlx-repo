@@ -1,0 +1,11 @@
+prefix=/home/maxim-solodkov/tom/Solodkov/nlx-repo/lib/simdutf
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: simdutf
+Description: Fast Unicode validation, transcoding and processing
+URL: 
+Version: 9.2.1
+Cflags: -I${includedir} 
+Libs: -L${libdir} -lsimdutf
+
