@@ -22,9 +22,9 @@ default configuration from `src/core/config.cpp`
 ./build/bin/supervisor
 ```
 
-custom configuration from `data/default.cfg`
+custom configuration from `default.cfg`
 ```bash
-./build/bin/supervisor ./data/default.cfg
+./build/bin/supervisor ./default.cfg
 ```
 
 ## tools

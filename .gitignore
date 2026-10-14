@@ -9,3 +9,5 @@ compile_commands.json
 archive
 logs/
 build
+.env
+

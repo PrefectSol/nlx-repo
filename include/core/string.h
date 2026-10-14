@@ -1,6 +1,7 @@
 #ifndef NLX_CORE_STRING_H
 #define NLX_CORE_STRING_H
 
+#include <cctype>
 #include <cassert>
 #include <cstddef>
 #include <string_view>
@@ -53,6 +54,11 @@ public:
 private:
     std::string_view m_view;
 };
+
+[[nodiscard]] constexpr char to_lower(char ch) noexcept;
+[[nodiscard]] constexpr bool is_space(char ch) noexcept;
+[[nodiscard]] constexpr std::string_view trim(std::string_view src) noexcept;
+[[nodiscard]] constexpr bool iequals(std::string_view a, std::string_view b) noexcept;
 
 } // namespace nlx::string
 
@@ -198,6 +204,50 @@ template<size_t Capacity, typename ...Args>
 constexpr std::string_view BasicFormatString<Capacity, Args...>::get() const noexcept
 {
     return m_view;
+}
+
+constexpr char to_lower(char ch) noexcept
+{
+    return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch + ('a' - 'A')) : ch;
+}
+
+constexpr bool is_space(char ch) noexcept
+{
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
+}
+
+constexpr std::string_view trim(std::string_view src) noexcept
+{
+    while (!src.empty() && is_space(src.front()))
+    {
+        src.remove_prefix(1);
+    }
+
+    while (!src.empty() && is_space(src.back()))
+    {
+        src.remove_suffix(1);
+    }
+
+    return src;
+}
+
+constexpr bool iequals(std::string_view a, std::string_view b) noexcept
+{
+    const size_t size_a = a.size();
+    if (size_a != b.size())
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < size_a; ++i)
+    {
+        if (to_lower(a[i]) != to_lower(b[i]))
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 } // namespace nlx::string

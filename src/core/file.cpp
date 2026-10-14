@@ -42,6 +42,14 @@ bool make_dir(const char *path, mode_t mode) noexcept
     return S_ISDIR(st.st_mode);
 }
 
+ssize_t close_with(int fd, int error) noexcept
+{
+    ::close(fd);
+    errno = error;
+
+    return -1;
+}
+
 } // namespace
 
 bool mkdir_p(const char *path) noexcept
@@ -106,4 +114,76 @@ bool writable(const char *path) noexcept
     return result == 0;
 }
 
+ssize_t read_file(const char *path, char *buffer, size_t capacity) noexcept
+{
+    if (path == nullptr || *path == '\0' || buffer == nullptr || capacity == 0) [[unlikely]]
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) [[unlikely]]
+    {
+        return -1;
+    }
+
+    size_t total = 0;
+    while (total < capacity)
+    {
+        const ssize_t bytes = ::read(fd, buffer + total, capacity - total);
+        if (bytes < 0) [[unlikely]]
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+
+            return close_with(fd, errno);
+        }
+
+        if (bytes == 0)
+        {
+            break;
+        }
+
+        total += static_cast<size_t>(bytes);
+    }
+
+    ::close(fd);
+
+    return static_cast<ssize_t>(total);
+}
+
+namespace detail
+{
+
+ssize_t get_utf8bom_size(const char *data, size_t size) noexcept
+{
+    if (data == nullptr || size == 0) [[unlikely]]
+    {
+        return 0;
+    }
+
+    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(data);
+
+    if (size >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+    {
+        return 3;
+    }
+
+    if (size >= 2 && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE)))
+    {
+        return -1;
+    }
+
+    if (size >= 4 && bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+} // namespace nlx::file::detail
 } // namespace nlx::file

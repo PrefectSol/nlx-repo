@@ -1,4 +1,5 @@
 #include "core/config.h"
+#include "core/credentials.h"
 #include "supervisor.h"
 
 #include <iostream>
@@ -17,19 +18,22 @@ int main(int argc, const char *argv[])
 
     try
     {
+        const nlx::Credentials credentials = nlx::Credentials::load(".env");
+        
         nlx::Config config;
         if (argc == 2)
         {
             config = nlx::Config::load(argv[1]);
         }
 
-        std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(std::move(config));
+        std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(std::move(config), std::move(credentials));
         return supervisor->run();
     }
     catch (const std::exception &exp)
     {
-        std::cerr << "error:\n" << exp.what() << std::endl;
+        std::cerr << "unexpected exception from supervisor:\n  " << exp.what() << std::endl;
     }
 
     return 1;
 }
+

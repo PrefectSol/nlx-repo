@@ -1,26 +1,27 @@
 #ifndef NLX_CORE_CONFIG_H
 #define NLX_CORE_CONFIG_H
 
-#include <string_view>
+#include <cstddef>
 
 namespace nlx
 {
 
 struct LoggerConfig
 {
-    char directory[128];
+    static constexpr size_t kPathCapacity = 128;
+
+    char directory[kPathCapacity];
     int rotation_minutes;
     int flush_ms;
 };
 
-class Config
+struct Config
 {
-public:
     LoggerConfig logger;
 
     Config();
-    
-    [[nodiscard]] static Config load(std::string_view path);
+
+    [[nodiscard]] static Config load(const char *path);
 };
 
 } // namespace nlx

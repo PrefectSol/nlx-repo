@@ -61,6 +61,7 @@ set_target_properties(dep_simdjson PROPERTIES
 
 set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/credentials.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/cpu.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file_descriptor.cpp"
@@ -69,6 +70,7 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_node.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_registry.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/env_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/supervisor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
 )

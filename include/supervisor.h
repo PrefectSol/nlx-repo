@@ -2,6 +2,7 @@
 #define NLX_SUPERVISOR_H
 
 #include "core/config.h"
+#include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "logging/logger.h"
 
@@ -14,7 +15,7 @@ namespace nlx
 class Supervisor
 {
 public:
-    explicit Supervisor(Config config);
+    explicit Supervisor(Config config, Credentials credentials);
     ~Supervisor();
 
     Supervisor(const Supervisor &) = delete;
@@ -27,6 +28,7 @@ public:
 
 private:
     Config m_config;
+    Credentials m_credentials;
 
     std::atomic<bool> m_started;
 

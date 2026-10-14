@@ -1,4 +1,5 @@
 #include "supervisor.h"
+#include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "logging/logger_registry.h"
 #include "core/system_error.h"
@@ -31,8 +32,9 @@ constexpr std::string_view signo_name(int signo) noexcept
 
 } // namespace
 
-Supervisor::Supervisor(Config config) :
+Supervisor::Supervisor(Config config, Credentials credentials) :
     m_config(std::move(config)),
+    m_credentials(std::move(credentials)),
     m_started(false),
     m_logger(m_config.logger),
     m_log(),
