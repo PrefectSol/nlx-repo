@@ -188,12 +188,12 @@ if(NOT TARGET CURL::libcurl)
 endif()
 
 # For compatibility with CMake's FindCURL.cmake
-set(CURL_VERSION_STRING "8.23.0-DEV")
+set(CURL_VERSION_STRING "8.23.1-DEV")
 set(CURL_LIBRARIES CURL::libcurl)
-set(CURL_LIBRARIES_PRIVATE "/home/maxim-solodkov/tom/Solodkov/nlx-repo/lib/openssl/lib64/libssl.a;/home/maxim-solodkov/tom/Solodkov/nlx-repo/lib/openssl/lib64/libcrypto.a;/home/maxim-solodkov/tom/Solodkov/nlx-repo/lib/openssl/lib64/libcrypto.a;/home/maxim-solodkov/tom/Solodkov/nlx-repo/lib/openssl/lib64/libcrypto.a")
+set(CURL_LIBRARIES_PRIVATE "/home/prefect/code/nlx-repo/server/lib/openssl/lib64/libssl.a;/home/prefect/code/nlx-repo/server/lib/openssl/lib64/libcrypto.a;/home/prefect/code/nlx-repo/server/lib/openssl/lib64/libcrypto.a;/home/prefect/code/nlx-repo/server/lib/openssl/lib64/libcrypto.a")
 set_and_check(CURL_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/include")
 
-set(CURL_SUPPORTED_PROTOCOLS "FILE;HTTP;HTTPS;IPFS;IPNS;WS;WSS")
+set(CURL_SUPPORTED_PROTOCOLS "HTTP;HTTPS")
 set(CURL_SUPPORTED_FEATURES "alt-svc;AsynchDNS;HSTS;HTTPS-proxy;IPv6;Largefile;SSL;threadsafe;UnixSockets")
 
 foreach(_curl_item IN LISTS CURL_SUPPORTED_PROTOCOLS CURL_SUPPORTED_FEATURES)
