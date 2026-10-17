@@ -27,7 +27,7 @@ int main(int argc, const char *argv[])
         }
 
         std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(std::move(config), std::move(credentials));
-        return supervisor->run();
+        return supervisor->start();
     }
     catch (const std::exception &exp)
     {

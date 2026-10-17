@@ -12,6 +12,7 @@ struct Credentials
 
     char api_key[kApiFieldCapacity];
     char api_secret[kApiFieldCapacity];
+    char api_passphrase[kApiFieldCapacity];
     
     [[nodiscard]] static Credentials load(const char *path);
 };

@@ -5,6 +5,8 @@
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "logging/logger.h"
+#include "logging/logger_registry.h"
+#include "service/strategy.h"
 
 #include <thread>
 #include <atomic>
@@ -23,7 +25,7 @@ public:
     Supervisor(Supervisor &&) = delete;
     Supervisor &operator=(Supervisor &&) = delete;
 
-    [[nodiscard]] int run();
+    [[nodiscard]] int start();
     void request_stop() noexcept;
 
 private:
@@ -33,9 +35,13 @@ private:
     std::atomic<bool> m_started;
 
     logging::Logger m_logger;
+    logging::LoggerRegistry m_registry;
     logging::LoggerNode m_log;
 
+    service::Strategy m_strategy;
+
     std::thread m_logger_thread;
+    std::thread m_strategy_thread;
 
     FileDescriptor m_epoll;
     FileDescriptor m_signals;

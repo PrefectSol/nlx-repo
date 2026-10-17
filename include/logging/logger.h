@@ -26,7 +26,7 @@ public:
     Logger(Logger &&) = delete;
     Logger &operator=(Logger &&) = delete;
 
-    void run() noexcept;
+    void start() noexcept;
     void request_stop() noexcept;
 
 private:

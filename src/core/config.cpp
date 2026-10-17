@@ -7,11 +7,13 @@ namespace nlx
 {
 
 Config::Config() :
-    logger() 
+    logger(), okx() 
 {
     detail::str_assign(logger.directory, "logs"); 
     logger.rotation_minutes = 1440;
     logger.flush_ms = 250;
+
+    okx.simulated = true;
 }
 
 Config Config::load(const char *path)

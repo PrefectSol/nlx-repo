@@ -122,7 +122,7 @@ LoggerNode Logger::create_node(std::string_view name)
     return LoggerNode(module.channel, m_notify);
 }
 
-void Logger::run() noexcept
+void Logger::start() noexcept
 {
     epoll_event event{};
     while (m_running.load(std::memory_order_acquire))

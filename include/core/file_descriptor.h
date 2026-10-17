@@ -47,6 +47,10 @@ void epoll_add(const FileDescriptor &epoll_fd, const FileDescriptor &fd, uint32_
 [[nodiscard]] size_t epoll_wait(const FileDescriptor &epoll_fd, std::span<epoll_event> events, int timeout) noexcept;
 
 void notify(const FileDescriptor &fd) noexcept;
+
+[[nodiscard]] bool wait(const FileDescriptor &fd, milliseconds timeout) noexcept;
+void wait(const FileDescriptor &fd) noexcept;
+
 [[nodiscard]] int receive(const FileDescriptor &fd) noexcept;
 [[nodiscard]] uint64_t drain(const FileDescriptor &fd) noexcept;
 

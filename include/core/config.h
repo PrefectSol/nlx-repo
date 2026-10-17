@@ -15,9 +15,15 @@ struct LoggerConfig
     int flush_ms;
 };
 
+struct OkxConfig
+{
+    bool simulated;
+};
+
 struct Config
 {
     LoggerConfig logger;
+    OkxConfig okx;
 
     Config();
 

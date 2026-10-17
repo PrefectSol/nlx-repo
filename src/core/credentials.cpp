@@ -24,6 +24,12 @@ Credentials Credentials::load(const char *path)
         throw std::invalid_argument("API_SECRET is too long");
     }
 
+    result = string::safe_strcpy(credentials.api_passphrase, reader.get("API_PASSPHRASE"));
+    if (!result)
+    {
+        throw std::invalid_argument("API_PASSPHRASE is too long");
+    }
+
     return credentials;
 }
 

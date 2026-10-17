@@ -18,7 +18,7 @@ public:
     [[nodiscard]] std::string_view get(std::string_view key) const;
 
 private:
-    static constexpr size_t kFileCapacity = 256;
+    static constexpr size_t kFileCapacity = 1024;
 
     char m_data[kFileCapacity];
     size_t m_size;

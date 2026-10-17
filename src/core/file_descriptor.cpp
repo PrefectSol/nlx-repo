@@ -1,11 +1,13 @@
 #include "core/file_descriptor.h"
 #include "core/fatal.h"
 #include "core/system_error.h"
+#include "core/time.h"
 
 #include <csignal>
 #include <utility>
 #include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
@@ -208,6 +210,32 @@ void notify(const FileDescriptor &fd) noexcept
     {
         NLX_FATAL("nlx::detail::notify() write failed");
     }
+}
+
+bool wait(const FileDescriptor &fd, milliseconds timeout) noexcept
+{
+    pollfd descriptor{};
+    descriptor.fd = fd.get();
+    descriptor.events = POLLIN;
+
+    int result;
+    do
+    {
+        result = ::poll(&descriptor, 1, static_cast<int>(timeout.count()));
+    }
+    while (result < 0 && errno == EINTR);
+
+    if (result < 0) [[unlikely]]
+    {
+        NLX_FATAL("nlx::detail::wait() poll failed");
+    }
+
+    return result != 0 && drain(fd) != 0;
+}
+
+void wait(const FileDescriptor &fd) noexcept
+{
+    [[maybe_unused]] const bool result = wait(fd, milliseconds(-1));
 }
 
 int receive(const FileDescriptor &fd) noexcept
