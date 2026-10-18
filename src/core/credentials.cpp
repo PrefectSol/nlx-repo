@@ -10,7 +10,7 @@ namespace nlx
 Credentials Credentials::load(const char *path)
 {
     Credentials credentials{};
-    parsing::EnvReader reader(path);
+    const parsing::EnvReader reader(path);
 
     bool result = string::safe_strcpy(credentials.api_key, reader.get("API_KEY"));
     if (!result)

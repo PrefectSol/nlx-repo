@@ -233,6 +233,39 @@ bool wait(const FileDescriptor &fd, milliseconds timeout) noexcept
     return result != 0 && drain(fd) != 0;
 }
 
+bool wait(const FileDescriptor &fd, const FileDescriptor &interrupt) noexcept
+{
+    pollfd descriptors[2]{};
+    descriptors[0].fd = fd.get();
+    descriptors[0].events = POLLIN;
+    descriptors[1].fd = interrupt.get();
+    descriptors[1].events = POLLIN;
+
+    while (true)
+    {
+        const int result = ::poll(descriptors, 2, -1);
+        if (result < 0 && errno == EINTR)
+        {
+            continue;
+        }
+
+        if (result < 0) [[unlikely]]
+        {
+            NLX_FATAL("nlx::detail::wait() poll failed");
+        }
+
+        if ((descriptors[0].revents & POLLIN) != 0 && drain(fd) != 0)
+        {
+            return true;
+        }
+
+        if (descriptors[1].revents != 0)
+        {
+            return false;
+        }
+    }
+}
+
 void wait(const FileDescriptor &fd) noexcept
 {
     [[maybe_unused]] const bool result = wait(fd, milliseconds(-1));

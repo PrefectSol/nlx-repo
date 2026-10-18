@@ -42,8 +42,11 @@ Supervisor::Supervisor(Config config, Credentials credentials) :
     m_logger(m_config.logger),
     m_registry(m_logger),
     m_log(m_registry.create_node("supervisor")),
-    m_strategy(m_config.okx, m_credentials, m_registry),
+    m_okx_rate_limiter(),
+    m_okx_http_client(m_config.okx, m_credentials, m_okx_rate_limiter, m_registry),
+    m_strategy(m_okx_http_client, m_registry),
     m_logger_thread(),
+    m_okx_http_thread(),
     m_strategy_thread(),
     m_epoll(),
     m_signals(),
@@ -76,7 +79,11 @@ Supervisor::~Supervisor()
         m_strategy_thread.join();
     }
 
-    m_strategy.shutdown();
+    if (m_okx_http_thread.joinable())
+    {
+        m_okx_http_client.request_stop();
+        m_okx_http_thread.join();
+    }
 
     if (m_logger_thread.joinable())
     {
@@ -102,8 +109,12 @@ int Supervisor::start()
     m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
     m_log.flush();
     
-    m_strategy.initialize();
-    m_strategy_thread = std::thread([this] { m_strategy.start(); });
+    m_okx_http_thread = std::thread([this] { m_okx_http_client.start(); });
+
+    if (m_strategy.initialize(m_epoll))
+    {
+        m_strategy_thread = std::thread([this] { m_strategy.start(); });
+    }
 
     epoll_event event{};
     while (true)

@@ -4,6 +4,8 @@
 #include "core/config.h"
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
+#include "exchange/okx_http_client.h"
+#include "exchange/okx_rate_limiter.h"
 #include "logging/logger.h"
 #include "logging/logger_registry.h"
 #include "service/strategy.h"
@@ -38,9 +40,13 @@ private:
     logging::LoggerRegistry m_registry;
     logging::LoggerNode m_log;
 
+    exchange::OkxRateLimiter m_okx_rate_limiter;
+    exchange::OkxHttpClient m_okx_http_client;
+
     service::Strategy m_strategy;
 
     std::thread m_logger_thread;
+    std::thread m_okx_http_thread;
     std::thread m_strategy_thread;
 
     FileDescriptor m_epoll;

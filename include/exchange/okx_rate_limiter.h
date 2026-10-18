@@ -17,6 +17,7 @@ enum OkxRequest : size_t
     HttpAccountConfig,
     HttpBalance,
     HttpPositions,
+    HttpPendingOrders,
     HttpSetPositionMode,
     HttpSetLeverage,
     WebsocketConnect,
@@ -25,9 +26,32 @@ enum OkxRequest : size_t
     OkxRequestsSize
 };
 
+namespace detail
+{
+
+template<typename Rule, size_t N>
+consteval size_t total_count(const std::array<Rule, N> &rules) noexcept
+{
+    size_t count = 0;
+    for (const Rule &rule : rules)
+    {
+        count += rule.count;
+    }
+
+    return count;
+}
+
+} // namespace nlx::exchange::detail
+
 class OkxRateLimiter
 {
 public:
+    struct Token
+    {
+        nanoseconds *request;
+        nanoseconds *global;
+    };
+
     OkxRateLimiter() noexcept;
 
     OkxRateLimiter(const OkxRateLimiter &) = delete;
@@ -35,7 +59,8 @@ public:
     OkxRateLimiter(OkxRateLimiter &&) = delete;
     OkxRateLimiter &operator=(OkxRateLimiter &&) = delete;
 
-    [[nodiscard]] nanoseconds acquire(OkxRequest request, nanoseconds now) noexcept;
+    [[nodiscard]] nanoseconds acquire(OkxRequest request, nanoseconds now, Token &token) noexcept;
+    void complete(const Token &token, nanoseconds now) noexcept;
     void penalize(OkxRequest request, nanoseconds now) noexcept;
 
 private:
@@ -52,11 +77,20 @@ private:
         nanoseconds window;
     };
 
+    struct History
+    {
+        nanoseconds *times;
+        uint32_t cursor;
+    };
+
+    static constexpr nanoseconds kPending = nanoseconds::max();
+
     static constexpr std::array<Rule, OkxRequestsSize> kRules = {{
         { 10, seconds(2) },
         { 5, seconds(2) },
         { 10, seconds(2) },
         { 10, seconds(2) },
+        { 60, seconds(2) },
         { 5, seconds(2) },
         { 20, seconds(2) },
         { 3, seconds(1) },
@@ -65,19 +99,22 @@ private:
     }};
 
     static constexpr std::array<Global, OkxRequestsSize> kGlobals = { 
-        None, None, None, None, None, None, None, None, None 
+        None, None, None, None, None, None, None, None, None, None 
     };
 
     static constexpr std::array<Rule, GlobalsSize> kGlobalRules = {{
         { 1000, seconds(2) }
     }};
 
-    std::mutex m_lock;
-    std::array<nanoseconds, OkxRequestsSize> m_ready;
-    std::array<nanoseconds, GlobalsSize> m_global_ready;
+    static constexpr size_t kTimesSize = detail::total_count(kRules) + detail::total_count(kGlobalRules);
 
-    static nanoseconds delay(const Rule &rule, nanoseconds ready, nanoseconds now) noexcept;
-    static nanoseconds advance(const Rule &rule, nanoseconds ready, nanoseconds now) noexcept;
+    std::mutex m_lock;
+    std::array<nanoseconds, kTimesSize> m_times;
+    std::array<History, OkxRequestsSize> m_histories;
+    std::array<History, GlobalsSize> m_global_histories;
+
+    static nanoseconds delay(const Rule &rule, const History &history, nanoseconds now) noexcept;
+    static nanoseconds *advance(const Rule &rule, History &history) noexcept;
 };
 
 } // namespace nlx::exchange

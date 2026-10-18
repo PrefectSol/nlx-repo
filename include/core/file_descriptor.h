@@ -49,6 +49,7 @@ void epoll_add(const FileDescriptor &epoll_fd, const FileDescriptor &fd, uint32_
 void notify(const FileDescriptor &fd) noexcept;
 
 [[nodiscard]] bool wait(const FileDescriptor &fd, milliseconds timeout) noexcept;
+[[nodiscard]] bool wait(const FileDescriptor &fd, const FileDescriptor &interrupt) noexcept;
 void wait(const FileDescriptor &fd) noexcept;
 
 [[nodiscard]] int receive(const FileDescriptor &fd) noexcept;
@@ -59,4 +60,3 @@ void wait(const FileDescriptor &fd) noexcept;
 } // namespace nlx::detail
 } // namespace nlx
 #endif // !NLX_CORE_FILE_DESCRIPTOR_H
-

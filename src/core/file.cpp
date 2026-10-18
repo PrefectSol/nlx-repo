@@ -19,8 +19,13 @@ namespace
 
 using stat_t = struct stat;
 
-bool make_dir(const char *path, mode_t mode) noexcept
+bool safe_mkdir(const char *path, mode_t mode) noexcept
 {
+    if (path == nullptr || *path == '\0') [[unlikely]]
+    {
+        return false;
+    }
+
     int result = ::mkdir(path, mode);
     if (result == 0)
     {
@@ -56,26 +61,28 @@ bool mkdir_p(const char *path) noexcept
 {
     if (path == nullptr || *path == '\0') [[unlikely]]
     {
+        errno = EINVAL;
         return false;
     }
 
     const size_t size = ::strnlen(path, PATH_MAX);
     if (size >= PATH_MAX) [[unlikely]]
     {
+        errno = ENAMETOOLONG;
         return false;
     }
 
     char buffer[PATH_MAX];
     std::memcpy(buffer, path, size + 1);
 
-    size_t lenght = size;
-    while (lenght > 1 && buffer[lenght - 1] == '/')
+    size_t length = size;
+    while (length > 1 && buffer[length - 1] == '/')
     {
-        buffer[--lenght] = '\0';
+        buffer[--length] = '\0';
     }
 
     constexpr mode_t mode = 0777;
-    for (size_t i = 1; i < lenght; ++i)
+    for (size_t i = 1; i < length; ++i)
     {
         if (buffer[i] != '/' || buffer[i - 1] == '/')
         {
@@ -83,7 +90,7 @@ bool mkdir_p(const char *path) noexcept
         }
 
         buffer[i] = '\0';
-        if (!make_dir(buffer, mode))
+        if (!safe_mkdir(buffer, mode))
         {
             return false;
         }
@@ -91,11 +98,17 @@ bool mkdir_p(const char *path) noexcept
         buffer[i] = '/';
     }
 
-    return make_dir(buffer, mode);
+    return safe_mkdir(buffer, mode);
 }
 
 bool writable(const char *path) noexcept
 {
+    if (path == nullptr || *path == '\0') [[unlikely]]
+    {
+        errno = EINVAL;
+        return false;
+    }
+
     const int fd = ::open(path, O_TMPFILE | O_WRONLY | O_CLOEXEC, 0644);
     if (fd >= 0)
     {

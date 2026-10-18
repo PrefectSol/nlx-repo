@@ -192,4 +192,22 @@ bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexce
     return true;
 }
 
+bool okx_parse_orders(std::string_view json, int &code, bool &open) noexcept
+{
+    simdjson::dom::array data;
+    if (!parse(json, code, data))
+    {
+        return false;
+    }
+
+    if (code != 0)
+    {
+        return true;
+    }
+
+    open = data.size() != 0;
+
+    return true;
+}
+
 } // namespace nlx::parsing::detail

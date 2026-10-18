@@ -42,6 +42,7 @@ public:
     [[nodiscard]] bool get_account_config(network::HttpRequest &request) noexcept;
     [[nodiscard]] bool get_balance(network::HttpRequest &request, std::string_view currency) noexcept;
     [[nodiscard]] bool get_positions(network::HttpRequest &request) noexcept;
+    [[nodiscard]] bool get_pending_orders(network::HttpRequest &request, uint32_t limit) noexcept;
 
     [[nodiscard]] bool set_position_mode(network::HttpRequest &request, bool hedge) noexcept;
     [[nodiscard]] bool set_leverage(network::HttpRequest &request, std::string_view instrument, uint32_t leverage,
@@ -61,6 +62,7 @@ private:
     static constexpr Route kAccountConfigRoute{ HttpAccountConfig, "/api/v5/account/config", true };
     static constexpr Route kBalanceRoute{ HttpBalance, "/api/v5/account/balance", true };
     static constexpr Route kPositionsRoute{ HttpPositions, "/api/v5/account/positions", true };
+    static constexpr Route kPendingOrdersRoute{ HttpPendingOrders, "/api/v5/trade/orders-pending", true };
     static constexpr Route kSetPositionModeRoute{ HttpSetPositionMode, "/api/v5/account/set-position-mode", true };
     static constexpr Route kSetLeverageRoute{ HttpSetLeverage, "/api/v5/account/set-leverage", true };
 
@@ -84,6 +86,7 @@ private:
         CURL *handle;
         const Route *route;
         network::HttpRequest *request;
+        OkxRateLimiter::Token token;
         nanoseconds sent;
         size_t body_size;
         char url[sizeof(kBaseUrl) - 1 + kTargetCapacity];
@@ -102,6 +105,7 @@ private:
 
     std::atomic<uint8_t> m_busy;
     uint8_t m_launched;
+    uint8_t m_throttled;
 
     char m_key[sizeof(kKeyHeader) - 1 + Credentials::kApiFieldCapacity];
     char m_passphrase[sizeof(kPassphraseHeader) - 1 + Credentials::kApiFieldCapacity];

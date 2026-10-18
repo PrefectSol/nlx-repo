@@ -2,6 +2,8 @@
 #include "core/system_error.h"
 
 #include <sched.h>
+#include <stdexcept>
+#include <format>
 
 namespace nlx::cpu
 {
@@ -13,6 +15,11 @@ void set_affinity(pthread_t thread, std::initializer_list<int> cpus)
 
     for (int cpu : cpus)
     {
+        if (cpu < 0 || cpu >= CPU_SETSIZE) [[unlikely]]
+        {
+            throw std::out_of_range(std::format("cpu {} out of range [0, {})", cpu, CPU_SETSIZE));
+        }
+
         CPU_SET(cpu, &cpuset);
     }
 
@@ -37,6 +44,11 @@ void set_scheduling(pthread_t thread, int policy, int priority)
 
 void set_name(pthread_t thread, const char *name)
 {
+    if (name == nullptr) [[unlikely]]
+    {
+        throw std::invalid_argument("thread name cannot be nullptr");
+    }
+
     const int result = ::pthread_setname_np(thread, name);
     if (result != 0) [[unlikely]]
     {

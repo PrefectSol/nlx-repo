@@ -26,6 +26,7 @@ OkxHttpClient::OkxHttpClient(const OkxConfig &config, const Credentials &credent
     m_lock(),
     m_busy(0),
     m_launched(0),
+    m_throttled(0),
     m_key(),
     m_passphrase(),
     m_simulated(),
@@ -117,6 +118,20 @@ bool OkxHttpClient::get_positions(network::HttpRequest &request) noexcept
     return push(kPositionsRoute, request, {}, {});
 }
 
+bool OkxHttpClient::get_pending_orders(network::HttpRequest &request, uint32_t limit) noexcept
+{
+    char query[kTargetCapacity];
+    const auto result = std::format_to_n(query, sizeof(query), "?limit={}", limit);
+
+    const size_t size = static_cast<size_t>(result.size);
+    if (size > sizeof(query))
+    {
+        return false;
+    }
+
+    return push(kPendingOrdersRoute, request, { query, size }, {});
+}
+
 bool OkxHttpClient::set_position_mode(network::HttpRequest &request, bool hedge) noexcept
 {
     const std::string_view body = hedge ? R"({"posMode":"long_short_mode"})" : R"({"posMode":"net_mode"})";
@@ -196,9 +211,15 @@ nanoseconds OkxHttpClient::launch() noexcept
 
         Slot &slot = m_slots[index];
 
-        const nanoseconds delay = m_limiter.acquire(slot.route->request, now);
+        const nanoseconds delay = m_limiter.acquire(slot.route->request, now, slot.token);
         if (delay != nanoseconds::zero())
         {
+            if ((m_throttled & slot_bit(index)) == 0)
+            {
+                m_throttled |= slot_bit(index);
+                m_log.log<logging::LogLevel::Warning>("request {} throttled", std::string_view(slot.url + sizeof(kBaseUrl) - 1));
+            }
+
             timeout = std::min(timeout, delay);
             continue;
         }
@@ -234,7 +255,10 @@ void OkxHttpClient::complete() noexcept
 
         const Slot &slot = m_slots[index];
         const std::string_view target(slot.url + sizeof(kBaseUrl) - 1);
-        const auto elapsed = static_cast<float>((time::now_monotonic() - slot.sent).count()) / 1000000.0f;
+        const nanoseconds now = time::now_monotonic();
+        const auto elapsed = static_cast<float>((now - slot.sent).count()) / 1000000.0f;
+
+        m_limiter.complete(slot.token, now);
 
         if (request->code == 200)
         {
@@ -253,7 +277,8 @@ void OkxHttpClient::complete() noexcept
 
         if (request->code == 429)
         {
-            m_limiter.penalize(slot.route->request, time::now_monotonic());
+            m_limiter.penalize(slot.route->request, now);
+            m_log.log<logging::LogLevel::Warning>("request {} rate limited by okx: limiter penalized", target);
         }
 
         release(index, *request);
@@ -268,6 +293,7 @@ void OkxHttpClient::abort() noexcept
         m_log.log<logging::LogLevel::Warning>("{} requests aborted", std::popcount(busy));
     }
 
+    const nanoseconds now = time::now_monotonic();
     for (size_t index = 0; index < kSlotsSize; ++index)
     {
         if ((busy & slot_bit(index)) == 0)
@@ -279,6 +305,7 @@ void OkxHttpClient::abort() noexcept
         if ((m_launched & slot_bit(index)) != 0)
         {
             m_http_client.cancel(slot.handle);
+            m_limiter.complete(slot.token, now);
         }
 
         network::HttpRequest &request = *slot.request;
@@ -295,6 +322,7 @@ void OkxHttpClient::release(size_t index, network::HttpRequest &request) noexcep
     const FileDescriptor &notify = request.notify;
 
     m_launched &= static_cast<uint8_t>(~slot_bit(index));
+    m_throttled &= static_cast<uint8_t>(~slot_bit(index));
     m_busy.fetch_and(static_cast<uint8_t>(~slot_bit(index)), std::memory_order_release);
 
     nlx::detail::notify(notify);
