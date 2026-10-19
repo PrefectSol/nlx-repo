@@ -120,7 +120,7 @@ bool okx_parse_account_config(std::string_view json, int &code, uint64_t &uid, i
     return true;
 }
 
-bool okx_parse_balance(std::string_view json, int &code, std::string_view currency, double &available) noexcept
+bool okx_parse_balance(std::string_view json, int &code, double &available, std::string_view currency) noexcept
 {
     simdjson::dom::array data;
     if (!parse(json, code, data))
@@ -192,7 +192,7 @@ bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexce
     return true;
 }
 
-bool okx_parse_orders(std::string_view json, int &code, bool &open) noexcept
+bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept
 {
     simdjson::dom::array data;
     if (!parse(json, code, data))
@@ -205,7 +205,7 @@ bool okx_parse_orders(std::string_view json, int &code, bool &open) noexcept
         return true;
     }
 
-    open = data.size() != 0;
+    count = data.size();
 
     return true;
 }

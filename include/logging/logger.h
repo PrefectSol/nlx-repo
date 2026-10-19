@@ -26,6 +26,7 @@ public:
     Logger(Logger &&) = delete;
     Logger &operator=(Logger &&) = delete;
 
+    void initialize();
     void start() noexcept;
     void request_stop() noexcept;
 
@@ -54,10 +55,11 @@ private:
 
     LoggerConfig m_config;
 
-    std::atomic<bool> m_running;
+    std::atomic<bool> m_initialized;
 
     FileDescriptor m_epoll;
     FileDescriptor m_notify;
+    FileDescriptor m_stop;
 
     std::array<Module, kModulesSize> m_modules;
     size_t m_registered;
@@ -71,7 +73,6 @@ private:
     void write_dropped(const Module &module, size_t dropped) noexcept;
 
     void rotate(Module &module, nanoseconds timestamp) noexcept;
-    void append(const Module &module, const char *data, size_t size) noexcept;
 };
 
 } // namespace nlx::logging

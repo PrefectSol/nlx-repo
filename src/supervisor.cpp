@@ -1,15 +1,15 @@
 #include "supervisor.h"
+#include "core/time.h"
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
-#include "logging/logger_registry.h"
 #include "core/system_error.h"
-#include "core/time.h"
+#include "logging/logger_registry.h"
 
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
-#include <thread>
 #include <unistd.h>
 
+#include <thread>
 #include <csignal>
 #include <stdexcept>
 #include <utility>
@@ -38,10 +38,9 @@ constexpr std::string_view signo_name(int signo) noexcept
 Supervisor::Supervisor(Config config, Credentials credentials) :
     m_config(std::move(config)),
     m_credentials(std::move(credentials)),
-    m_started(false),
     m_logger(m_config.logger),
     m_registry(m_logger),
-    m_log(m_registry.create_node("supervisor")),
+    m_log(),
     m_okx_rate_limiter(),
     m_okx_http_client(m_config.okx, m_credentials, m_okx_rate_limiter, m_registry),
     m_strategy(m_okx_http_client, m_registry),
@@ -56,6 +55,8 @@ Supervisor::Supervisor(Config config, Credentials credentials) :
     {
         throw std::runtime_error("system clock is not synchronized");
     }
+
+    m_log = m_registry.create_node("supervisor");
 
     m_epoll = FileDescriptor::make_epoll();
     m_signals = FileDescriptor::make_signalfd({ SIGINT, SIGTERM }, true);
@@ -94,27 +95,21 @@ Supervisor::~Supervisor()
 
 int Supervisor::start()
 {
-    bool expected = false;
-    if (!m_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-    {
-        return -1;
-    }
-
+    m_logger.initialize();
     m_logger_thread = std::thread([this] { m_logger.start(); });
-    
+
+    m_okx_http_client.initialize();
+    m_okx_http_thread = std::thread([this] { m_okx_http_client.start(); });
+
+    m_strategy.initialize();
+    m_strategy_thread = std::thread([this] { m_strategy.start(); });
+
     m_log.log("supervisor started");
     m_log.log("logger directory = {}", m_config.logger.directory);
     m_log.log("logger rotation minutes = {}", m_config.logger.rotation_minutes);
     m_log.log("logger flush ms = {}", m_config.logger.flush_ms);
     m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
     m_log.flush();
-    
-    m_okx_http_thread = std::thread([this] { m_okx_http_client.start(); });
-
-    if (m_strategy.initialize(m_epoll))
-    {
-        m_strategy_thread = std::thread([this] { m_strategy.start(); });
-    }
 
     epoll_event event{};
     while (true)
@@ -125,7 +120,7 @@ int Supervisor::start()
             continue;
         }
 
-        if (event.data.fd == m_stop.get())
+        if (event.data.fd == m_stop)
         {
             [[maybe_unused]] const uint64_t result = detail::drain(m_stop);
             m_log.log<logging::LogLevel::Warning>("stop requested");

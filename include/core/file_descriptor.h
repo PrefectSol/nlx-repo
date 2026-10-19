@@ -23,8 +23,11 @@ public:
     FileDescriptor(FileDescriptor &&other) noexcept;
     FileDescriptor &operator=(FileDescriptor &&other) noexcept;
 
+    [[nodiscard]] bool operator==(const FileDescriptor &other) const noexcept;
+    [[nodiscard]] bool operator==(int other) const noexcept;
+
     void reset() noexcept;
-    
+   
     [[nodiscard]] int get() const noexcept;
     [[nodiscard]] bool valid() const noexcept;
 
@@ -47,15 +50,12 @@ void epoll_add(const FileDescriptor &epoll_fd, const FileDescriptor &fd, uint32_
 [[nodiscard]] size_t epoll_wait(const FileDescriptor &epoll_fd, std::span<epoll_event> events, int timeout) noexcept;
 
 void notify(const FileDescriptor &fd) noexcept;
-
-[[nodiscard]] bool wait(const FileDescriptor &fd, milliseconds timeout) noexcept;
-[[nodiscard]] bool wait(const FileDescriptor &fd, const FileDescriptor &interrupt) noexcept;
-void wait(const FileDescriptor &fd) noexcept;
-
 [[nodiscard]] int receive(const FileDescriptor &fd) noexcept;
 [[nodiscard]] uint64_t drain(const FileDescriptor &fd) noexcept;
 
 [[nodiscard]] bool writeTo(const FileDescriptor &fd, const char *data, size_t size) noexcept;
+
+void wait(const FileDescriptor &fd) noexcept;
 
 } // namespace nlx::detail
 } // namespace nlx

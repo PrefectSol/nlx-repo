@@ -9,6 +9,7 @@
 #include "core/time.h"
 
 #include <linux/limits.h>
+
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -64,9 +65,10 @@ constexpr bool validate_name(std::string_view name) noexcept
 
 Logger::Logger(LoggerConfig config) :
     m_config(std::move(config)),
-    m_running(true),
+    m_initialized(false),
     m_epoll(),
     m_notify(),
+    m_stop(),
     m_modules(),
     m_registered(0)
 {
@@ -77,20 +79,12 @@ Logger::Logger(LoggerConfig config) :
         throw std::invalid_argument("invalid configuration");
     }
 
-    if (!file::mkdir_p(m_config.directory))
-    {
-        throw SystemError("failed to create directory");
-    }
-    
-    if (!file::writable(m_config.directory))
-    {
-        throw SystemError("directory is not writable");
-    }
-
     m_epoll = FileDescriptor::make_epoll();
     m_notify = FileDescriptor::make_eventfd(true);
+    m_stop = FileDescriptor::make_eventfd(true);
 
     nlx::detail::epoll_add(m_epoll, m_notify);
+    nlx::detail::epoll_add(m_epoll, m_stop);
 }
 
 LoggerNode Logger::create_node(std::string_view name)
@@ -122,14 +116,40 @@ LoggerNode Logger::create_node(std::string_view name)
     return LoggerNode(module.channel, m_notify);
 }
 
+void Logger::initialize()
+{
+    if (!file::mkdir_p(m_config.directory))
+    {
+        throw SystemError("failed to create directory");
+    }
+    
+    if (!file::writable(m_config.directory))
+    {
+        throw SystemError("directory is not writable");
+    }
+
+    m_initialized.store(true, std::memory_order_release);
+}
+
 void Logger::start() noexcept
 {
+    if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
+    {
+        NLX_FATAL("nlx::logging::Logger::start() called before initialize()");
+    }
+
     epoll_event event{};
-    while (m_running.load(std::memory_order_acquire))
+    while (true)
     {
         const size_t count = nlx::detail::epoll_wait(m_epoll, { &event, 1 }, m_config.flush_ms);
         if (count != 0)
         {
+            if (event.data.fd == m_stop)
+            {
+                [[maybe_unused]] const uint64_t result = nlx::detail::drain(m_stop);
+                break;
+            }
+
             [[maybe_unused]] const uint64_t result = nlx::detail::drain(m_notify);
         }
 
@@ -141,8 +161,7 @@ void Logger::start() noexcept
 
 void Logger::request_stop() noexcept
 {
-    m_running.store(false, std::memory_order_release);
-    nlx::detail::notify(m_notify);
+    nlx::detail::notify(m_stop);
 }
 
 void Logger::drain_modules() noexcept
@@ -264,7 +283,10 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
     line.append(format.substr(begin));
 
     const std::string_view text = line.finish();
-    append(module, text.data(), text.size());
+    if (!nlx::detail::writeTo(module.file, text.data(), text.size())) [[unlikely]]
+    {
+        NLX_FATAL("nlx::logging::Logger::write_record() detail::writeTo failed");
+    }
 }
 
 void Logger::write_dropped(const Module &module, size_t dropped) noexcept
@@ -281,7 +303,10 @@ void Logger::write_dropped(const Module &module, size_t dropped) noexcept
     line.append(dropped);
 
     const std::string_view text = line.finish();
-    append(module, text.data(), text.size());
+    if (!nlx::detail::writeTo(module.file, text.data(), text.size())) [[unlikely]]
+    {
+        NLX_FATAL("nlx::logging::Logger::write_dropped() detail::writeTo failed");
+    }
 }
 
 void Logger::rotate(Module &module, nanoseconds timestamp) noexcept
@@ -304,14 +329,6 @@ void Logger::rotate(Module &module, nanoseconds timestamp) noexcept
     if (!module.file.valid()) [[unlikely]]
     {
         NLX_FATAL("nlx::logging::Logger::rotate() FileDescriptor::open_append failed");
-    }
-}
-
-void Logger::append(const Module &module, const char *data, size_t size) noexcept
-{
-    if (!nlx::detail::writeTo(module.file, data, size)) [[unlikely]]
-    {
-        NLX_FATAL("nlx::logging::Logger::append() detail::writeTo failed");
     }
 }
 

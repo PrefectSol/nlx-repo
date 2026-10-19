@@ -1,349 +1,368 @@
 #include "exchange/okx_http_client.h"
+#include "core/fatal.h"
+#include "core/string.h"
 
 #include <algorithm>
-#include <bit>
-#include <format>
+#include <utility>
 
 namespace nlx::exchange
 {
 
-namespace
+template<typename ...Args>
+bool OkxHttpClient::push(const Route &route, network::HttpRequest &request, std::format_string<Args...> format, Args &&...args) noexcept
 {
+    request.size = 0;
+    request.code = 0;
 
-constexpr uint8_t slot_bit(size_t index) noexcept
-{
-    return static_cast<uint8_t>(1u << index);
-}
-
-} // namespace
-
-OkxHttpClient::OkxHttpClient(const OkxConfig &config, const Credentials &credentials,
-                             OkxRateLimiter &limiter, logging::LoggerRegistry &registry) :
-    m_credentials(credentials),
-    m_limiter(limiter),
-    m_log(registry.create_node("okx_http")),
-    m_running(true),
-    m_lock(),
-    m_busy(0),
-    m_launched(0),
-    m_throttled(0),
-    m_key(),
-    m_passphrase(),
-    m_simulated(),
-    m_public_headers(nullptr),
-    m_http_client(),
-    m_slots()
-{
-    std::format_to_n(m_key, sizeof(m_key) - 1, "{}{}", kKeyHeader, credentials.api_key);
-    std::format_to_n(m_passphrase, sizeof(m_passphrase) - 1, "{}{}", kPassphraseHeader, credentials.api_passphrase);
-
-    m_simulated[0] = { const_cast<char *>(kSimulatedHeader), nullptr };
-    m_public_headers = config.simulated ? m_simulated : nullptr;
-
-    for (Slot &slot : m_slots)
+    bool queued = false;
     {
-        slot.handle = m_http_client.open();
+        const std::lock_guard<std::mutex> lock(m_lock);
 
-        slot.headers[0] = { m_key, &slot.headers[1] };
-        slot.headers[1] = { m_passphrase, &slot.headers[2] };
-        slot.headers[2] = { slot.timestamp, &slot.headers[3] };
-        slot.headers[3] = { slot.sign, m_public_headers };
-        slot.headers[4] = { const_cast<char *>(kContentTypeHeader), m_public_headers };
-    }
-}
-
-OkxHttpClient::~OkxHttpClient() noexcept
-{
-    for (Slot &slot : m_slots)
-    {
-        if (slot.handle != nullptr)
+        size_t index = 0;
+        while (index < kSlotsSize && m_slots[index].state != SlotState::Free)
         {
-            m_http_client.close(slot.handle);
+            ++index;
+        }
+
+        if (index == kSlotsSize)
+        {
+            ++m_rejected;
+        }
+        else
+        {
+            Slot &slot = m_slots[index];
+
+            const auto result = std::format_to_n(slot.parameters, kParametersCapacity, format, std::forward<Args>(args)...);
+            if (static_cast<size_t>(result.size) > kParametersCapacity) [[unlikely]]
+            {
+                NLX_FATAL("nlx::exchange::OkxHttpClient::push() parameters exceed capacity");
+            }
+
+            slot.state = SlotState::Queued;
+            slot.route = &route;
+            slot.request = &request;
+            slot.size = static_cast<size_t>(result.size);
+
+            queued = true;
         }
     }
+
+    m_http_client.wakeup();
+
+    return queued;
+}
+
+OkxHttpClient::OkxHttpClient(const OkxConfig &config, const Credentials &credentials, OkxRateLimiter &limiter, logging::LoggerRegistry &registry) :
+    m_log(),
+    m_limiter(limiter),
+    m_key(),
+    m_passphrase(),
+    m_secret(),
+    m_simulated(config.simulated),
+    m_lock(),
+    m_slots(),
+    m_rejected(0),
+    m_stop(),
+    m_initialized(false),
+    m_http_client()
+{
+    m_log = registry.create_node("okx_http");
+
+    std::format_to_n(m_key, sizeof(m_key) - 1, "{}{}", kKeyHeader, credentials.api_key);
+    std::format_to_n(m_passphrase, sizeof(m_passphrase) - 1, "{}{}", kPassphraseHeader, credentials.api_passphrase);
+    nlx::detail::str_assign(m_secret, credentials.api_secret);
+
+    m_stop = FileDescriptor::make_eventfd(true);
+}
+
+void OkxHttpClient::initialize()
+{
+    m_http_client.initialize();
+    m_initialized.store(true, std::memory_order_release);
 }
 
 void OkxHttpClient::start() noexcept
 {
-    m_log.log("okx http client started");
+    if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
+    {
+        NLX_FATAL("nlx::exchange::OkxHttpClient::start() called before initialize()");
+    }
 
-    while (m_running.load(std::memory_order_acquire))
+    m_log.log("okx http client started");
+    m_log.flush();
+
+    while (true)
     {
         const nanoseconds timeout = launch();
-        m_http_client.perform(timeout);
+        m_http_client.perform(m_stop, timeout);
+
+        if (nlx::detail::drain(m_stop) != 0)
+        {
+            break;
+        }
+
         complete();
     }
 
-    abort();
+    abort_requests();
 
     m_log.log("okx http client stopped");
+    m_log.flush();
 }
 
 void OkxHttpClient::request_stop() noexcept
 {
-    {
-        const std::lock_guard<std::mutex> lock(m_lock);
-        m_running.store(false, std::memory_order_release);
-    }
-
-    m_http_client.wakeup();
+    nlx::detail::notify(m_stop);
 }
 
-bool OkxHttpClient::get_time(network::HttpRequest &request) noexcept
+bool OkxHttpClient::get_system_time(network::HttpRequest &request) noexcept
 {
-    return push(kTimeRoute, request, {}, {});
+    return push(kSystemTimeRoute, request, "");
 }
 
 bool OkxHttpClient::get_account_config(network::HttpRequest &request) noexcept
 {
-    return push(kAccountConfigRoute, request, {}, {});
+    return push(kAccountConfigRoute, request, "");
 }
 
 bool OkxHttpClient::get_balance(network::HttpRequest &request, std::string_view currency) noexcept
 {
-    char query[kTargetCapacity];
-    const auto result = std::format_to_n(query, sizeof(query), "?ccy={}", currency);
-
-    const size_t size = static_cast<size_t>(result.size);
-    if (size > sizeof(query))
-    {
-        return false;
-    }
-
-    return push(kBalanceRoute, request, { query, size }, {});
+    return push(kBalanceRoute, request, "ccy={}", currency);
 }
 
 bool OkxHttpClient::get_positions(network::HttpRequest &request) noexcept
 {
-    return push(kPositionsRoute, request, {}, {});
+    return push(kPositionsRoute, request, "");
 }
 
 bool OkxHttpClient::get_pending_orders(network::HttpRequest &request, uint32_t limit) noexcept
 {
-    char query[kTargetCapacity];
-    const auto result = std::format_to_n(query, sizeof(query), "?limit={}", limit);
-
-    const size_t size = static_cast<size_t>(result.size);
-    if (size > sizeof(query))
-    {
-        return false;
-    }
-
-    return push(kPendingOrdersRoute, request, { query, size }, {});
+    return push(kPendingOrdersRoute, request, "limit={}", limit);
 }
 
 bool OkxHttpClient::set_position_mode(network::HttpRequest &request, bool hedge) noexcept
 {
-    const std::string_view body = hedge ? R"({"posMode":"long_short_mode"})" : R"({"posMode":"net_mode"})";
-    return push(kSetPositionModeRoute, request, {}, body);
+    return push(kSetPositionModeRoute, request, R"({{"posMode":"{}"}})", hedge ? "long_short_mode" : "net_mode");
 }
 
 bool OkxHttpClient::set_leverage(network::HttpRequest &request, std::string_view instrument, uint32_t leverage,
                                  std::string_view margin_mode, std::string_view position_side) noexcept
 {
-    char body[kBodyCapacity];
-    auto result = std::format_to_n(body, sizeof(body), R"({{"instId":"{}","lever":"{}","mgnMode":"{}"}})",
-                                   instrument, leverage, margin_mode);
-
-    if (!position_side.empty())
+    if (position_side.empty())
     {
-        result = std::format_to_n(body, sizeof(body), R"({{"instId":"{}","lever":"{}","mgnMode":"{}","posSide":"{}"}})",
-                                  instrument, leverage, margin_mode, position_side);
+        return push(kSetLeverageRoute, request, R"({{"instId":"{}","lever":"{}","mgnMode":"{}"}})",
+                    instrument, leverage, margin_mode);
     }
 
-    const size_t size = static_cast<size_t>(result.size);
-    if (size > sizeof(body))
-    {
-        return false;
-    }
-
-    return push(kSetLeverageRoute, request, {}, { body, size });
-}
-
-bool OkxHttpClient::push(const Route &route, network::HttpRequest &request, std::string_view query, std::string_view body) noexcept
-{
-    if (route.path.size() + query.size() >= kTargetCapacity || body.size() > kBodyCapacity)
-    {
-        return false;
-    }
-
-    {
-        const std::lock_guard<std::mutex> lock(m_lock);
-
-        const uint8_t busy = m_busy.load(std::memory_order_acquire);
-        if (!m_running.load(std::memory_order_relaxed) || busy == kSlotsMask)
-        {
-            return false;
-        }
-
-        const size_t index = static_cast<size_t>(std::countr_one(busy));
-
-        Slot &slot = m_slots[index];
-        slot.route = &route;
-        slot.request = &request;
-
-        const auto result = std::format_to_n(slot.url, sizeof(slot.url) - 1, "{}{}{}", kBaseUrl, route.path, query);
-        *result.out = '\0';
-
-        std::copy_n(body.data(), body.size(), slot.body);
-        slot.body_size = body.size();
-
-        m_busy.fetch_or(slot_bit(index), std::memory_order_release);
-    }
-
-    m_http_client.wakeup();
-
-    return true;
+    return push(kSetLeverageRoute, request, R"({{"instId":"{}","lever":"{}","mgnMode":"{}","posSide":"{}"}})",
+                instrument, leverage, margin_mode, position_side);
 }
 
 nanoseconds OkxHttpClient::launch() noexcept
 {
-    const uint8_t queued = m_busy.load(std::memory_order_acquire) & static_cast<uint8_t>(~m_launched);
+    std::array<bool, kSlotsSize> queued{};
+    uint32_t rejected = 0;
+    {
+        const std::lock_guard<std::mutex> lock(m_lock);
+
+        for (size_t index = 0; index < kSlotsSize; ++index)
+        {
+            queued[index] = m_slots[index].state == SlotState::Queued;
+        }
+
+        rejected = std::exchange(m_rejected, 0);
+    }
+
+    if (rejected != 0)
+    {
+        m_log.log<logging::LogLevel::Warning>("{} requests rejected: all {} slots are busy", rejected, kSlotsSize);
+    }
+
     const nanoseconds now = time::now_monotonic();
 
     nanoseconds timeout = nanoseconds::max();
     for (size_t index = 0; index < kSlotsSize; ++index)
     {
-        if ((queued & slot_bit(index)) == 0)
+        if (!queued[index])
         {
             continue;
         }
 
         Slot &slot = m_slots[index];
 
-        const nanoseconds delay = m_limiter.acquire(slot.route->request, now, slot.token);
+        const nanoseconds delay = m_limiter.acquire(slot.route->request, now, slot.ticket);
         if (delay != nanoseconds::zero())
         {
-            if ((m_throttled & slot_bit(index)) == 0)
+            if (!slot.throttled)
             {
-                m_throttled |= slot_bit(index);
-                m_log.log<logging::LogLevel::Warning>("request {} throttled", std::string_view(slot.url + sizeof(kBaseUrl) - 1));
+                slot.throttled = true;
+                m_log.log<logging::LogLevel::Warning>("request {} throttled by rate limit", slot.route->path);
             }
 
             timeout = std::min(timeout, delay);
             continue;
         }
 
-        const std::string_view body(slot.body, slot.body_size);
-
-        curl_slist *headers = m_public_headers;
-        if (slot.route->sign)
-        {
-            sign(slot);
-            slot.headers[3].next = body.empty() ? m_public_headers : &slot.headers[4];
-            headers = slot.headers;
-        }
-
-        slot.sent = now;
-        m_launched |= slot_bit(index);
-        m_http_client.send(slot.handle, slot.url, body, headers, *slot.request);
+        send(index, now);
     }
 
     return timeout;
 }
 
+void OkxHttpClient::send(size_t index, nanoseconds now) noexcept
+{
+    Slot &slot = m_slots[index];
+    const Route &route = *slot.route;
+
+    const bool post = route.method == network::HttpMethod::Post;
+    const std::string_view parameters(slot.parameters, slot.size);
+    const std::string_view method = post ? "POST" : "GET";
+    const std::string_view separator = post || parameters.empty() ? "" : "?";
+    const std::string_view query = post ? std::string_view() : parameters;
+    const std::string_view body = post ? parameters : std::string_view();
+
+    const std::array<char, time::iso8601_ms_size> timestamp = nlx::detail::format_iso8601_ms(time::now());
+    const std::string_view stamp(timestamp.data(), timestamp.size() - 1);
+
+    char message[kLineCapacity];
+    const auto prehash = std::format_to_n(message, sizeof(message), "{}{}{}{}{}{}", stamp, method, route.path, separator, query, body);
+    if (static_cast<size_t>(prehash.size) > sizeof(message)) [[unlikely]]
+    {
+        NLX_FATAL("nlx::exchange::OkxHttpClient::send() signature message exceeds capacity");
+    }
+
+    char signature[crypto::hmac_sha256_base64_size];
+    crypto::hmac_sha256_base64(signature, m_secret, { message, static_cast<size_t>(prehash.size) });
+
+    const auto timestamp_header = std::format_to_n(slot.timestamp, sizeof(slot.timestamp) - 1, "{}{}", kTimestampHeader, stamp);
+    *timestamp_header.out = '\0';
+
+    const auto signature_header = std::format_to_n(slot.signature, sizeof(slot.signature) - 1, "{}{}", kSignatureHeader, signature);
+    *signature_header.out = '\0';
+
+    char url[kLineCapacity];
+    const auto location = std::format_to_n(url, sizeof(url) - 1, "{}{}{}{}", kBaseUrl, route.path, separator, query);
+    if (static_cast<size_t>(location.size) > sizeof(url) - 1) [[unlikely]]
+    {
+        NLX_FATAL("nlx::exchange::OkxHttpClient::send() url exceeds capacity");
+    }
+
+    *location.out = '\0';
+
+    std::array<const char *, network::HttpClient::kHeadersSize> headers{};
+    size_t count = 0;
+
+    headers[count++] = m_key;
+    headers[count++] = m_passphrase;
+    headers[count++] = slot.timestamp;
+    headers[count++] = slot.signature;
+
+    if (post)
+    {
+        headers[count++] = kContentTypeHeader;
+    }
+
+    if (m_simulated)
+    {
+        headers[count++] = kSimulatedHeader;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(m_lock);
+        slot.state = SlotState::Running;
+    }
+
+    slot.sent = now;
+    m_http_client.send(index, route.method, url, body, { headers.data(), count }, *slot.request);
+}
+
 void OkxHttpClient::complete() noexcept
 {
-    CURL *handle = nullptr;
-    while (network::HttpRequest *request = m_http_client.complete(handle))
+    size_t index = 0;
+    while (m_http_client.complete(index))
     {
-        size_t index = 0;
-        while (m_slots[index].handle != handle)
-        {
-            ++index;
-        }
+        Slot &slot = m_slots[index];
+        const network::HttpRequest &request = *slot.request;
 
-        const Slot &slot = m_slots[index];
-        const std::string_view target(slot.url + sizeof(kBaseUrl) - 1);
         const nanoseconds now = time::now_monotonic();
-        const auto elapsed = static_cast<float>((now - slot.sent).count()) / 1000000.0f;
+        const float elapsed = static_cast<float>((now - slot.sent).count()) / 1000000.0f;
 
-        m_limiter.complete(slot.token, now);
+        m_limiter.complete(slot.ticket, now);
 
-        if (request->code == 200)
+        if (request.code == 200)
         {
-            m_log.log("request {} done: bytes = {}, time = {} ms", target, request->size, elapsed);
+            m_log.log("request {} done: bytes = {}, time = {} ms", slot.route->path, request.size, elapsed);
+        }
+        else if (request.code == network::HttpRequest::kOverflow)
+        {
+            m_log.log<logging::LogLevel::Warning>("request {} failed: response exceeds {} bytes", slot.route->path, request.capacity);
         }
         else
         {
             m_log.log<logging::LogLevel::Warning>("request {} failed: code = {}, time = {} ms, response = {}",
-                                                  target, request->code, elapsed, std::string_view(request->buffer, request->size));
+                                                  slot.route->path, request.code, elapsed, std::string_view(request.buffer, request.size));
         }
 
-        if (request->truncated)
-        {
-            m_log.log<logging::LogLevel::Warning>("request {} truncated: bytes = {}", target, request->size);
-        }
-
-        if (request->code == 429)
+        if (request.code == 429)
         {
             m_limiter.penalize(slot.route->request, now);
-            m_log.log<logging::LogLevel::Warning>("request {} rate limited by okx: limiter penalized", target);
+            m_log.log<logging::LogLevel::Warning>("request {} rate limited by okx", slot.route->path);
         }
 
-        release(index, *request);
+        release(slot);
     }
 }
 
-void OkxHttpClient::abort() noexcept
+void OkxHttpClient::abort_requests() noexcept
 {
-    const uint8_t busy = m_busy.load(std::memory_order_acquire);
-    if (busy != 0)
-    {
-        m_log.log<logging::LogLevel::Warning>("{} requests aborted", std::popcount(busy));
-    }
-
     const nanoseconds now = time::now_monotonic();
+
+    size_t aborted = 0;
     for (size_t index = 0; index < kSlotsSize; ++index)
     {
-        if ((busy & slot_bit(index)) == 0)
+        Slot &slot = m_slots[index];
+
+        SlotState state = SlotState::Free;
+        {
+            const std::lock_guard<std::mutex> lock(m_lock);
+            state = slot.state;
+        }
+
+        if (state == SlotState::Free)
         {
             continue;
         }
 
-        Slot &slot = m_slots[index];
-        if ((m_launched & slot_bit(index)) != 0)
+        if (state == SlotState::Running)
         {
-            m_http_client.cancel(slot.handle);
-            m_limiter.complete(slot.token, now);
+            m_http_client.cancel(index);
+            m_limiter.complete(slot.ticket, now);
         }
 
-        network::HttpRequest &request = *slot.request;
-        request.size = 0;
-        request.code = -CURLE_ABORTED_BY_CALLBACK;
-        request.truncated = false;
+        slot.request->size = 0;
+        slot.request->code = network::HttpRequest::kAborted;
 
-        release(index, request);
+        release(slot);
+        ++aborted;
+    }
+
+    if (aborted != 0)
+    {
+        m_log.log<logging::LogLevel::Warning>("{} requests aborted", aborted);
     }
 }
 
-void OkxHttpClient::release(size_t index, network::HttpRequest &request) noexcept
+void OkxHttpClient::release(Slot &slot) noexcept
 {
-    const FileDescriptor &notify = request.notify;
+    const FileDescriptor &notify = slot.request->notify;
 
-    m_launched &= static_cast<uint8_t>(~slot_bit(index));
-    m_throttled &= static_cast<uint8_t>(~slot_bit(index));
-    m_busy.fetch_and(static_cast<uint8_t>(~slot_bit(index)), std::memory_order_release);
+    {
+        const std::lock_guard<std::mutex> lock(m_lock);
+        slot.state = SlotState::Free;
+        slot.throttled = false;
+    }
 
     nlx::detail::notify(notify);
-}
-
-void OkxHttpClient::sign(Slot &slot) noexcept
-{
-    const std::array<char, time::iso8601_ms_size> timestamp = nlx::detail::format_iso8601_ms(time::now());
-
-    const std::string_view method = slot.body_size == 0 ? "GET" : "POST";
-    const std::string_view target(slot.url + sizeof(kBaseUrl) - 1);
-    const std::string_view body(slot.body, slot.body_size);
-
-    char message[time::iso8601_ms_size + sizeof("POST") + kTargetCapacity + kBodyCapacity];
-    const auto result = std::format_to_n(message, sizeof(message), "{}{}{}{}", timestamp.data(), method, target, body);
-
-    char signature[crypto::hmac_sha256_base64_size];
-    crypto::hmac_sha256_base64(signature, m_credentials.api_secret, { message, static_cast<size_t>(result.size) });
-
-    std::format_to_n(slot.timestamp, sizeof(slot.timestamp) - 1, "{}{}", kTimestampHeader, timestamp.data());
-    std::format_to_n(slot.sign, sizeof(slot.sign) - 1, "{}{}", kSignHeader, signature);
 }
 
 } // namespace nlx::exchange

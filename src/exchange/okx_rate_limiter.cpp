@@ -5,38 +5,52 @@
 namespace nlx::exchange
 {
 
-OkxRateLimiter::OkxRateLimiter() noexcept :
-    m_lock(),
-    m_times(),
-    m_histories(),
-    m_global_histories()
+namespace
 {
-    m_times.fill(nanoseconds::min());
 
-    nanoseconds *times = m_times.data();
-    for (size_t index = 0; index < OkxRequestsSize; ++index)
+template<typename Rule, size_t N>
+consteval bool fits(const std::array<Rule, N> &rules, size_t capacity) noexcept
+{
+    for (const Rule &rule : rules)
     {
-        m_histories[index] = { times, 0 };
-        times += kRules[index].count;
+        if (rule.count == 0 || rule.count > capacity)
+        {
+            return false;
+        }
     }
 
-    for (size_t index = 0; index < GlobalsSize; ++index)
-    {
-        m_global_histories[index] = { times, 0 };
-        times += kGlobalRules[index].count;
-    }
+    return true;
 }
 
-nanoseconds OkxRateLimiter::acquire(OkxRequest request, nanoseconds now, Token &token) noexcept
+} // namespace
+
+OkxRateLimiter::OkxRateLimiter() noexcept :
+    m_lock(),
+    m_histories(),
+    m_order_history()
+{
+    static_assert(fits(kRules, kHistoryCapacity));
+    static_assert(kOrderRule.count != 0 && kOrderRule.count <= kHistoryCapacity);
+
+    for (History &history : m_histories)
+    {
+        history.times.fill(kEmpty);
+    }
+
+    m_order_history.times.fill(kEmpty);
+}
+
+nanoseconds OkxRateLimiter::acquire(OkxRequest request, nanoseconds now, Ticket &ticket) noexcept
 {
     const std::lock_guard<std::mutex> lock(m_lock);
 
-    const Global global = kGlobals[request];
+    const Rule &rule = kRules[request];
+    History &history = m_histories[request];
 
-    nanoseconds wait = delay(kRules[request], m_histories[request], now);
-    if (global != None)
+    nanoseconds wait = delay(rule, history, now);
+    if (rule.order)
     {
-        wait = std::max(wait, delay(kGlobalRules[global], m_global_histories[global], now));
+        wait = std::max(wait, delay(kOrderRule, m_order_history, now));
     }
 
     if (wait != nanoseconds::zero())
@@ -44,25 +58,27 @@ nanoseconds OkxRateLimiter::acquire(OkxRequest request, nanoseconds now, Token &
         return wait;
     }
 
-    token.request = advance(kRules[request], m_histories[request]);
-    token.global = nullptr;
+    ticket.request = request;
+    ticket.entry = reserve(rule, history);
+    ticket.order_entry = kNoEntry;
 
-    if (global != None)
+    if (rule.order)
     {
-        token.global = advance(kGlobalRules[global], m_global_histories[global]);
+        ticket.order_entry = reserve(kOrderRule, m_order_history);
     }
 
     return nanoseconds::zero();
 }
 
-void OkxRateLimiter::complete(const Token &token, nanoseconds now) noexcept
+void OkxRateLimiter::complete(const Ticket &ticket, nanoseconds now) noexcept
 {
     const std::lock_guard<std::mutex> lock(m_lock);
 
-    *token.request = now;
-    if (token.global != nullptr)
+    m_histories[ticket.request].times[ticket.entry] = now;
+
+    if (ticket.order_entry != kNoEntry)
     {
-        *token.global = now;
+        m_order_history.times[ticket.order_entry] = now;
     }
 }
 
@@ -70,10 +86,10 @@ void OkxRateLimiter::penalize(OkxRequest request, nanoseconds now) noexcept
 {
     const std::lock_guard<std::mutex> lock(m_lock);
 
-    const History &history = m_histories[request];
-    for (uint32_t index = 0; index < kRules[request].count; ++index)
+    History &history = m_histories[request];
+    for (uint32_t entry = 0; entry < kRules[request].count; ++entry)
     {
-        history.times[index] = std::max(history.times[index], now);
+        history.times[entry] = std::max(history.times[entry], now);
     }
 }
 
@@ -93,16 +109,12 @@ nanoseconds OkxRateLimiter::delay(const Rule &rule, const History &history, nano
     return oldest + rule.window - now;
 }
 
-nanoseconds *OkxRateLimiter::advance(const Rule &rule, History &history) noexcept
+uint32_t OkxRateLimiter::reserve(const Rule &rule, History &history) noexcept
 {
-    nanoseconds *entry = history.times + history.cursor;
-    *entry = kPending;
+    const uint32_t entry = history.cursor;
 
-    ++history.cursor;
-    if (history.cursor == rule.count)
-    {
-        history.cursor = 0;
-    }
+    history.times[entry] = kPending;
+    history.cursor = (entry + 1) % rule.count;
 
     return entry;
 }

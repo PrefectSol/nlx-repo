@@ -11,7 +11,6 @@
 #include "service/strategy.h"
 
 #include <thread>
-#include <atomic>
 
 namespace nlx
 {
@@ -33,8 +32,6 @@ public:
 private:
     Config m_config;
     Credentials m_credentials;
-
-    std::atomic<bool> m_started;
 
     logging::Logger m_logger;
     logging::LoggerRegistry m_registry;

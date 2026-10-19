@@ -8,10 +8,10 @@
 namespace nlx::crypto
 {
 
-static_assert(hmac_sha256_base64_size == 4 * ((SHA256_DIGEST_LENGTH + 2) / 3) + 1);
-
 void hmac_sha256_base64(char (&output)[hmac_sha256_base64_size], std::string_view key, std::string_view message) noexcept
 {
+    static_assert(hmac_sha256_base64_size == 4 * ((SHA256_DIGEST_LENGTH + 2) / 3) + 1);
+
     unsigned char digest[SHA256_DIGEST_LENGTH];
     unsigned int size = 0;
 

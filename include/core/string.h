@@ -79,6 +79,8 @@ namespace nlx::string
 template <size_t N>
 constexpr bool safe_strcpy(char (&dest)[N], std::string_view src) noexcept
 {
+    static_assert(N > 0);
+
     const size_t size = src.size();
     if (size >= N) [[unlikely]]
     {
@@ -233,13 +235,13 @@ constexpr std::string_view trim(std::string_view src) noexcept
 
 constexpr bool iequals(std::string_view a, std::string_view b) noexcept
 {
-    const size_t size_a = a.size();
-    if (size_a != b.size())
+    const size_t size = a.size();
+    if (size != b.size())
     {
         return false;
     }
 
-    for (size_t i = 0; i < size_a; ++i)
+    for (size_t i = 0; i < size; ++i)
     {
         if (to_lower(a[i]) != to_lower(b[i]))
         {

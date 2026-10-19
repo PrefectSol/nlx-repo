@@ -52,6 +52,16 @@ FileDescriptor &FileDescriptor::operator=(FileDescriptor &&other) noexcept
     return *this;
 }
 
+bool FileDescriptor::operator==(const FileDescriptor &other) const noexcept
+{
+    return m_fd == other.m_fd;
+}
+
+bool FileDescriptor::operator==(int other) const noexcept
+{
+    return m_fd == other;
+}
+
 void FileDescriptor::reset() noexcept
 {
     const int fd = std::exchange(m_fd, -1);
@@ -212,65 +222,6 @@ void notify(const FileDescriptor &fd) noexcept
     }
 }
 
-bool wait(const FileDescriptor &fd, milliseconds timeout) noexcept
-{
-    pollfd descriptor{};
-    descriptor.fd = fd.get();
-    descriptor.events = POLLIN;
-
-    int result;
-    do
-    {
-        result = ::poll(&descriptor, 1, static_cast<int>(timeout.count()));
-    }
-    while (result < 0 && errno == EINTR);
-
-    if (result < 0) [[unlikely]]
-    {
-        NLX_FATAL("nlx::detail::wait() poll failed");
-    }
-
-    return result != 0 && drain(fd) != 0;
-}
-
-bool wait(const FileDescriptor &fd, const FileDescriptor &interrupt) noexcept
-{
-    pollfd descriptors[2]{};
-    descriptors[0].fd = fd.get();
-    descriptors[0].events = POLLIN;
-    descriptors[1].fd = interrupt.get();
-    descriptors[1].events = POLLIN;
-
-    while (true)
-    {
-        const int result = ::poll(descriptors, 2, -1);
-        if (result < 0 && errno == EINTR)
-        {
-            continue;
-        }
-
-        if (result < 0) [[unlikely]]
-        {
-            NLX_FATAL("nlx::detail::wait() poll failed");
-        }
-
-        if ((descriptors[0].revents & POLLIN) != 0 && drain(fd) != 0)
-        {
-            return true;
-        }
-
-        if (descriptors[1].revents != 0)
-        {
-            return false;
-        }
-    }
-}
-
-void wait(const FileDescriptor &fd) noexcept
-{
-    [[maybe_unused]] const bool result = wait(fd, milliseconds(-1));
-}
-
 int receive(const FileDescriptor &fd) noexcept
 {
     signalfd_siginfo info{};
@@ -339,6 +290,32 @@ bool writeTo(const FileDescriptor &fd, const char *data, size_t size) noexcept
     }
 
     return true;
+}
+
+void wait(const FileDescriptor &fd) noexcept
+{
+    pollfd descriptor{};
+    descriptor.fd = fd.get();
+    descriptor.events = POLLIN;
+
+    while (true)
+    {
+        const int result = ::poll(&descriptor, 1, -1);
+        if (result < 0 && errno == EINTR)
+        {
+            continue;
+        }
+
+        if (result < 0) [[unlikely]]
+        {
+            NLX_FATAL("nlx::detail::wait() poll failed");
+        }
+
+        if (drain(fd) != 0)
+        {
+            return;
+        }
+    }
 }
 
 } // namespace nlx::detail

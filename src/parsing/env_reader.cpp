@@ -9,24 +9,6 @@
 namespace nlx::parsing
 {
 
-namespace
-{
-
-constexpr std::string_view unquote(std::string_view src) noexcept
-{
-    if (src.size() >= 2 &&
-        (src.front() == '"' || src.front() == '\'') &&
-        src.front() == src.back())
-    {
-        src.remove_prefix(1);
-        src.remove_suffix(1);
-    }
-
-    return src;
-}
-
-} // namespace
-
 EnvReader::EnvReader(const char *path) :
     m_size(0), m_offset(0)
 {
@@ -79,7 +61,6 @@ std::string_view EnvReader::get(std::string_view key) const
         pos = eol + 1;
 
         line = string::trim(line);
-
         if (line.empty() || line.front() == '#')
         {
             continue;
@@ -92,11 +73,19 @@ std::string_view EnvReader::get(std::string_view key) const
         }
 
         const std::string_view line_key = string::trim(line.substr(0, equal));
-        if (string::iequals(line_key, key))
+        if (!string::iequals(line_key, key))
         {
-            value = unquote(string::trim(line.substr(equal + 1)));
-            found = true;
+            continue;
         }
+
+        value = string::trim(line.substr(equal + 1));
+        if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') && value.front() == value.back())
+        {
+            value.remove_prefix(1);
+            value.remove_suffix(1);
+        }
+
+        found = true;
     }
 
     if (!found)

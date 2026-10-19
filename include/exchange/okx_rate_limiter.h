@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 
 namespace nlx::exchange 
@@ -13,7 +14,7 @@ namespace nlx::exchange
 
 enum OkxRequest : size_t
 {
-    HttpTime,
+    HttpSystemTime,
     HttpAccountConfig,
     HttpBalance,
     HttpPositions,
@@ -26,30 +27,14 @@ enum OkxRequest : size_t
     OkxRequestsSize
 };
 
-namespace detail
-{
-
-template<typename Rule, size_t N>
-consteval size_t total_count(const std::array<Rule, N> &rules) noexcept
-{
-    size_t count = 0;
-    for (const Rule &rule : rules)
-    {
-        count += rule.count;
-    }
-
-    return count;
-}
-
-} // namespace nlx::exchange::detail
-
 class OkxRateLimiter
 {
 public:
-    struct Token
+    struct Ticket
     {
-        nanoseconds *request;
-        nanoseconds *global;
+        OkxRequest request;
+        uint32_t entry;
+        uint32_t order_entry;
     };
 
     OkxRateLimiter() noexcept;
@@ -59,62 +44,51 @@ public:
     OkxRateLimiter(OkxRateLimiter &&) = delete;
     OkxRateLimiter &operator=(OkxRateLimiter &&) = delete;
 
-    [[nodiscard]] nanoseconds acquire(OkxRequest request, nanoseconds now, Token &token) noexcept;
-    void complete(const Token &token, nanoseconds now) noexcept;
+    [[nodiscard]] nanoseconds acquire(OkxRequest request, nanoseconds now, Ticket &ticket) noexcept;
+    void complete(const Ticket &ticket, nanoseconds now) noexcept;
     void penalize(OkxRequest request, nanoseconds now) noexcept;
 
 private:
-    enum Global : size_t
-    {
-        Orders,
-        GlobalsSize,
-        None = GlobalsSize
-    };
+    static constexpr size_t kHistoryCapacity = 1000;
+    static constexpr uint32_t kNoEntry = std::numeric_limits<uint32_t>::max();
+
+    static constexpr nanoseconds kEmpty = nanoseconds::min();
+    static constexpr nanoseconds kPending = nanoseconds::max();
 
     struct Rule
     {
         uint32_t count;
         nanoseconds window;
+        bool order;
     };
 
     struct History
     {
-        nanoseconds *times;
+        std::array<nanoseconds, kHistoryCapacity> times;
         uint32_t cursor;
     };
 
-    static constexpr nanoseconds kPending = nanoseconds::max();
-
     static constexpr std::array<Rule, OkxRequestsSize> kRules = {{
-        { 10, seconds(2) },
-        { 5, seconds(2) },
-        { 10, seconds(2) },
-        { 10, seconds(2) },
-        { 60, seconds(2) },
-        { 5, seconds(2) },
-        { 20, seconds(2) },
-        { 3, seconds(1) },
-        { 480, minutes(60) },
-        { 480, minutes(60) }
+        { 10, seconds(2), false },
+        { 5, seconds(2), false },
+        { 10, seconds(2), false },
+        { 10, seconds(2), false },
+        { 60, seconds(2), false },
+        { 5, seconds(2), false },
+        { 20, seconds(2), false },
+        { 3, seconds(1), false },
+        { 480, minutes(60), false },
+        { 480, minutes(60), false }
     }};
 
-    static constexpr std::array<Global, OkxRequestsSize> kGlobals = { 
-        None, None, None, None, None, None, None, None, None, None 
-    };
-
-    static constexpr std::array<Rule, GlobalsSize> kGlobalRules = {{
-        { 1000, seconds(2) }
-    }};
-
-    static constexpr size_t kTimesSize = detail::total_count(kRules) + detail::total_count(kGlobalRules);
+    static constexpr Rule kOrderRule = { 1000, seconds(2), false };
 
     std::mutex m_lock;
-    std::array<nanoseconds, kTimesSize> m_times;
     std::array<History, OkxRequestsSize> m_histories;
-    std::array<History, GlobalsSize> m_global_histories;
+    History m_order_history;
 
     static nanoseconds delay(const Rule &rule, const History &history, nanoseconds now) noexcept;
-    static nanoseconds *advance(const Rule &rule, History &history) noexcept;
+    static uint32_t reserve(const Rule &rule, History &history) noexcept;
 };
 
 } // namespace nlx::exchange

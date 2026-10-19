@@ -6,26 +6,40 @@
 
 #include <curl/curl.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace nlx::network
 {
 
+enum class HttpMethod : uint8_t
+{
+    Get,
+    Post
+};
+
 struct HttpRequest
 {
+    static constexpr int kAborted = -CURLE_ABORTED_BY_CALLBACK;
+    static constexpr int kOverflow = -CURLE_WRITE_ERROR;
+
     char *buffer;
     size_t capacity;
     size_t size;
     int code;
-    bool truncated;
     const FileDescriptor &notify;
 };
 
 class HttpClient
 {
 public:
-    HttpClient();
+    static constexpr size_t kTransfersSize = 8;
+    static constexpr size_t kHeadersSize = 8;
+
+    HttpClient() noexcept;
     ~HttpClient() noexcept;
 
     HttpClient(const HttpClient &) = delete;
@@ -33,23 +47,36 @@ public:
     HttpClient(HttpClient &&) = delete;
     HttpClient &operator=(HttpClient &&) = delete;
 
-    [[nodiscard]] CURL *open();
-    void close(CURL *handle) noexcept;
+    void initialize();
 
-    void send(CURL *handle, const char *url, std::string_view body, curl_slist *headers, HttpRequest &request) noexcept;
-    void cancel(CURL *handle) noexcept;
+    void send(size_t index, HttpMethod method, const char *url, std::string_view body,
+              std::span<const char *const> headers, HttpRequest &request) noexcept;
+    void cancel(size_t index) noexcept;
 
-    void perform(nanoseconds timeout) noexcept;
-    [[nodiscard]] HttpRequest *complete(CURL *&handle) noexcept;
+    void perform(const FileDescriptor &stop, nanoseconds timeout) noexcept;
+    [[nodiscard]] bool complete(size_t &index) noexcept;
 
     void wakeup() noexcept;
 
 private:
-    static constexpr long kTimeout = 5000;
+    static constexpr milliseconds kTimeout{ 5000 };
+
+    struct Transfer
+    {
+        CURL *handle;
+        HttpRequest *request;
+        curl_slist headers[kHeadersSize];
+    };
 
     CURLM *m_multi;
+    std::array<Transfer, kTransfersSize> m_transfers;
 
-    static size_t on_write(char *data, size_t size, size_t count, void *context) noexcept;
+    void detach(Transfer &transfer) noexcept;
+
+    template<typename T>
+    static void set_option(CURL *handle, CURLoption option, T value) noexcept;
+
+    static size_t write_response(char *data, size_t size, size_t count, void *context) noexcept;
 };
 
 } // namespace nlx::network
