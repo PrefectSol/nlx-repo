@@ -11,7 +11,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
 
 namespace nlx::service
 {
@@ -32,7 +31,6 @@ public:
 
 private:
     static constexpr size_t kBufferCapacity = 256 * 1024;
-    static constexpr uint32_t kOrdersLimit = 100;
 
     logging::LoggerNode m_log;
     exchange::OkxHttpClient &m_okx_http_client;
@@ -47,8 +45,9 @@ private:
     bool okx_get_account_config(network::HttpRequest &request, int &code, uint64_t &uid, int &mode, bool &hedge, bool &trade) noexcept;
     bool okx_get_positions(network::HttpRequest &request, int &code, size_t &count) noexcept;
     bool okx_get_orders(network::HttpRequest &request, int &code, size_t &count) noexcept;
+    bool okx_get_balance_usdt(network::HttpRequest &request, int &code, double &available) noexcept;
     bool okx_set_hedge_mode(network::HttpRequest &request, int &code) noexcept;
-    bool okx_get_balance(network::HttpRequest &request, int &code, double &available, std::string_view currency) noexcept;
+    bool okx_set_futures_mode(network::HttpRequest &request, int &code) noexcept;
 };
 
 } // namespace nlx::service

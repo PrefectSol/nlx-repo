@@ -18,7 +18,7 @@ namespace nlx
 class Supervisor
 {
 public:
-    explicit Supervisor(Config config, Credentials credentials);
+    explicit Supervisor(const Config &config, const Credentials &credentials);
     ~Supervisor();
 
     Supervisor(const Supervisor &) = delete;

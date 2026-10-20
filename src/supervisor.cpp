@@ -35,9 +35,9 @@ constexpr std::string_view signo_name(int signo) noexcept
 
 } // namespace
 
-Supervisor::Supervisor(Config config, Credentials credentials) :
-    m_config(std::move(config)),
-    m_credentials(std::move(credentials)),
+Supervisor::Supervisor(const Config &config, const Credentials &credentials) :
+    m_config(config),
+    m_credentials(credentials),
     m_logger(m_config.logger),
     m_registry(m_logger),
     m_log(),

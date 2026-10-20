@@ -33,7 +33,7 @@ void Strategy::initialize()
     static_assert(kBufferCapacity > parsing::json_padding_size);
     
     char buffer[kBufferCapacity];
-    network::HttpRequest request{ buffer, sizeof(buffer) - parsing::json_padding_size, 0, 0, m_okx_notify };
+    network::HttpRequest request{ buffer, sizeof(buffer) - parsing::json_padding_size, 0, 0, false, m_okx_notify };
 
     int code = -1;
 
@@ -59,7 +59,7 @@ void Strategy::initialize()
     }
 
     m_log.log("okx uid = {}", uid);
-    m_log.log("okx account futures mode = {}", (mode == 2));
+    m_log.log("okx account mode = {}", mode);
     m_log.log("okx hedge mode = {}", hedge);
     m_log.log("okx trade permission = {}", trade);
     m_log.flush();
@@ -92,6 +92,30 @@ void Strategy::initialize()
     if (orders != 0)
     {
         throw std::runtime_error(std::format("okx account has {} open orders", orders));
+    }
+
+    if (mode != 2)
+    {
+        result = okx_set_futures_mode(request, code);
+        if (!result)
+        {
+            throw std::runtime_error(std::format("okx set account futures mode failed: http = {}, code = {}", request.code, code));
+        }
+
+        m_log.log("okx account futures mode enabled");
+        m_log.flush();
+    }
+
+    if (!hedge)
+    {
+        result = okx_set_hedge_mode(request, code);
+        if (!result)
+        {
+            throw std::runtime_error(std::format("okx set hedge mode failed: http = {}, code = {}", request.code, code));
+        }
+
+        m_log.log("okx account hedge mode enabled");
+        m_log.flush();
     }
 
     m_initialized.store(true, std::memory_order_release);
@@ -135,7 +159,6 @@ void Strategy::request_stop() noexcept
 bool Strategy::okx_get_system_time(network::HttpRequest &request, int &code, milliseconds &timestamp) noexcept
 {
     code = -1;
-
     bool result = m_okx_http_client.get_system_time(request);
     if (!result)
     {
@@ -143,7 +166,6 @@ bool Strategy::okx_get_system_time(network::HttpRequest &request, int &code, mil
     }
 
     detail::wait(request.notify);
-
     result = parsing::detail::okx_parse_time({ request.buffer, request.size }, code, timestamp);
 
     return result && request.code == 200 && code == 0;
@@ -152,7 +174,6 @@ bool Strategy::okx_get_system_time(network::HttpRequest &request, int &code, mil
 bool Strategy::okx_get_account_config(network::HttpRequest &request, int &code, uint64_t &uid, int &mode, bool &hedge, bool &trade) noexcept
 {
     code = -1;
-
     bool result = m_okx_http_client.get_account_config(request);
     if (!result)
     {
@@ -160,7 +181,6 @@ bool Strategy::okx_get_account_config(network::HttpRequest &request, int &code, 
     }
 
     detail::wait(request.notify);
-
     result = parsing::detail::okx_parse_account_config({ request.buffer, request.size }, code, uid, mode, hedge, trade);
 
     return result && request.code == 200 && code == 0;
@@ -169,7 +189,6 @@ bool Strategy::okx_get_account_config(network::HttpRequest &request, int &code, 
 bool Strategy::okx_get_positions(network::HttpRequest &request, int &code, size_t &count) noexcept
 {
     code = -1;
-
     bool result = m_okx_http_client.get_positions(request);
     if (!result)
     {
@@ -177,7 +196,6 @@ bool Strategy::okx_get_positions(network::HttpRequest &request, int &code, size_
     }
 
     detail::wait(request.notify);
-
     result = parsing::detail::okx_parse_positions({ request.buffer, request.size }, code, count);
 
     return result && request.code == 200 && code == 0;
@@ -186,16 +204,29 @@ bool Strategy::okx_get_positions(network::HttpRequest &request, int &code, size_
 bool Strategy::okx_get_orders(network::HttpRequest &request, int &code, size_t &count) noexcept
 {
     code = -1;
-
-    bool result = m_okx_http_client.get_pending_orders(request, kOrdersLimit);
+    bool result = m_okx_http_client.get_pending_orders(request, 100);
     if (!result)
     {
         return false;
     }
 
     detail::wait(request.notify);
-
     result = parsing::detail::okx_parse_orders({ request.buffer, request.size }, code, count);
+
+    return result && request.code == 200 && code == 0;
+}
+
+bool Strategy::okx_get_balance_usdt(network::HttpRequest &request, int &code, double &available) noexcept
+{
+    code = -1;
+    bool result = m_okx_http_client.get_balance(request, "USDT");
+    if (!result)
+    {
+        return false;
+    }
+
+    detail::wait(request.notify);
+    result = parsing::detail::okx_parse_balance({ request.buffer, request.size }, code, available, "USDT");
 
     return result && request.code == 200 && code == 0;
 }
@@ -203,7 +234,6 @@ bool Strategy::okx_get_orders(network::HttpRequest &request, int &code, size_t &
 bool Strategy::okx_set_hedge_mode(network::HttpRequest &request, int &code) noexcept
 {
     code = -1;
-
     bool result = m_okx_http_client.set_position_mode(request, true);
     if (!result)
     {
@@ -211,25 +241,22 @@ bool Strategy::okx_set_hedge_mode(network::HttpRequest &request, int &code) noex
     }
 
     detail::wait(request.notify);
-
     result = parsing::detail::okx_parse_code({ request.buffer, request.size }, code);
 
     return result && request.code == 200 && code == 0;
 }
 
-bool Strategy::okx_get_balance(network::HttpRequest &request, int &code, double &available, std::string_view currency) noexcept
+bool Strategy::okx_set_futures_mode(network::HttpRequest &request, int &code) noexcept
 {
     code = -1;
-
-    bool result = m_okx_http_client.get_balance(request, currency);
+    bool result = m_okx_http_client.set_account_mode(request, 2);
     if (!result)
     {
         return false;
     }
 
     detail::wait(request.notify);
-
-    result = parsing::detail::okx_parse_balance({ request.buffer, request.size }, code, available, currency);
+    result = parsing::detail::okx_parse_code({ request.buffer, request.size }, code);
 
     return result && request.code == 200 && code == 0;
 }

@@ -20,7 +20,7 @@ enum OkxRequest : size_t
     HttpPositions,
     HttpPendingOrders,
     HttpSetPositionMode,
-    HttpSetLeverage,
+    HttpSetAccountMode,
     WebsocketConnect,
     WebsocketPublicSubscribe,
     WebsocketPrivateSubscribe,

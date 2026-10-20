@@ -11,44 +11,103 @@
 namespace nlx::network
 {
 
-template<typename T>
-void HttpClient::set_option(CURL *handle, CURLoption option, T value) noexcept
+namespace 
 {
-    if (curl_easy_setopt(handle, option, value) != CURLE_OK) [[unlikely]]
+
+template <typename T>
+constexpr bool kSetOptArg = std::is_same_v<T, long> || std::is_same_v<T, curl_off_t> || std::is_pointer_v<T>;
+
+template <typename T>
+void easy_setopt(CURL *handle, CURLoption option, T value)
+{
+    static_assert(kSetOptArg<T>, "easy_setopt: long / curl_off_t / pointer");
+
+    const CURLcode result = curl_easy_setopt(handle, option, value);
+    if (result != CURLE_OK) [[unlikely]]
     {
-        NLX_FATAL("nlx::network::HttpClient::set_option() curl_easy_setopt failed");
+        throw std::runtime_error(std::format("curl_easy_setopt failed: {}", curl_easy_strerror(result)));
     }
 }
 
-HttpClient::HttpClient() noexcept :
+template <typename T>
+void safe_easy_setopt(CURL *handle, CURLoption option, T value) noexcept
+{
+    static_assert(kSetOptArg<T>, "easy_setopt: long / curl_off_t / pointer");
+
+    const CURLcode result = curl_easy_setopt(handle, option, value);
+    if (result != CURLE_OK) [[unlikely]]
+    {
+        NLX_FATAL("nlx::network::safe_easy_setopt() curl_easy_setopt failed");
+    }
+}
+
+template <typename T>
+void multi_setopt(CURLM *multi, CURLMoption option, T value)
+{
+    static_assert(kSetOptArg<T>, "curl_multi_setopt: long / curl_off_t / pointer");
+    
+    const CURLMcode result = curl_multi_setopt(multi, option, value);
+    if (result != CURLM_OK) [[unlikely]]
+    {
+        throw std::runtime_error(std::format("curl_multi_setopt failed: {}", curl_multi_strerror(result)));
+    }
+}
+
+} // namespace
+
+HttpClient::HttpClient():
     m_multi(nullptr),
     m_transfers()
 {
-
+    const CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (result != CURLE_OK) [[unlikely]]
+    {
+        throw std::runtime_error("curl_global_init failed");
+    }
 }
 
 HttpClient::~HttpClient() noexcept
 {
-    if (m_multi == nullptr)
-    {
-        return;
-    }
+    release();
+    curl_global_cleanup();
+}
 
+void HttpClient::release() noexcept
+{
     for (Transfer &transfer : m_transfers)
     {
         if (transfer.request != nullptr)
         {
-            detach(transfer);
+            release_handle(transfer.handle);
+            transfer.request = nullptr;
         }
 
         if (transfer.handle != nullptr)
         {
             curl_easy_cleanup(transfer.handle);
+            transfer.handle = nullptr;
         }
     }
 
-    curl_multi_cleanup(m_multi);
-    curl_global_cleanup();
+    if (m_multi != nullptr)
+    {
+        const CURLMcode result = curl_multi_cleanup(m_multi);
+        if (result != CURLM_OK) [[unlikely]]
+        {
+            NLX_FATAL("nlx::network::HttpClient::release() curl_multi_cleanup failed");
+        }
+
+        m_multi = nullptr;
+    }
+}
+
+void HttpClient::release_handle(CURL *handle) noexcept
+{
+    const CURLMcode result = curl_multi_remove_handle(m_multi, handle);
+    if (result != CURLM_OK) [[unlikely]]
+    {
+        NLX_FATAL("nlx::network::HttpClient::release_handle() curl_multi_remove_handle failed");
+    }
 }
 
 void HttpClient::initialize()
@@ -58,176 +117,88 @@ void HttpClient::initialize()
         return;
     }
 
-    const CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (result != CURLE_OK)
+    try 
     {
-        throw std::runtime_error("curl_global_init failed");
-    }
-
-    m_multi = curl_multi_init();
-    if (m_multi == nullptr)
-    {
-        curl_global_cleanup();
-        throw std::runtime_error("curl_multi_init failed");
-    }
-
-    for (Transfer &transfer : m_transfers)
-    {
-        transfer.handle = curl_easy_init();
-        if (transfer.handle == nullptr)
+        m_multi = curl_multi_init();
+        if (m_multi == nullptr)
         {
-            throw std::runtime_error("curl_easy_init failed");
+            throw std::runtime_error("curl_multi_init failed");
         }
 
-        const bool configure = curl_easy_setopt(transfer.handle, CURLOPT_WRITEFUNCTION, write_response) == CURLE_OK &&
-                               curl_easy_setopt(transfer.handle, CURLOPT_WRITEDATA, &transfer) == CURLE_OK &&
-                               curl_easy_setopt(transfer.handle, CURLOPT_CAINFO, CA_CERT_PATH) == CURLE_OK &&
-                               curl_easy_setopt(transfer.handle, CURLOPT_TIMEOUT_MS, static_cast<long>(kTimeout.count())) == CURLE_OK &&
-                               curl_easy_setopt(transfer.handle, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
-                               curl_easy_setopt(transfer.handle, CURLOPT_TCP_NODELAY, 1L) == CURLE_OK;
-        if (!configure)
+        multi_setopt(m_multi, CURLMOPT_MAX_TOTAL_CONNECTIONS, static_cast<long>(kTransfersSize));
+        multi_setopt(m_multi, CURLMOPT_MAXCONNECTS, static_cast<long>(kTransfersSize));
+
+        for (Transfer &transfer : m_transfers)
         {
-            throw std::runtime_error(std::format("curl_easy_setopt failed: {}", curl_easy_strerror(result)));
+            transfer.handle = curl_easy_init();
+            if (transfer.handle == nullptr)
+            {
+                throw std::runtime_error("curl_easy_init failed");
+            }
+
+            easy_setopt(transfer.handle, CURLOPT_WRITEFUNCTION, write_callback);
+            easy_setopt(transfer.handle, CURLOPT_WRITEDATA, static_cast<void *>(&transfer));
+            easy_setopt(transfer.handle, CURLOPT_PRIVATE, static_cast<void *>(&transfer));
+            easy_setopt(transfer.handle, CURLOPT_CAINFO, CA_CERT_PATH);
+            easy_setopt(transfer.handle, CURLOPT_TIMEOUT_MS, static_cast<long>(kTimeout.count()));
+            easy_setopt(transfer.handle, CURLOPT_NOSIGNAL, 1L);
+            easy_setopt(transfer.handle, CURLOPT_TCP_NODELAY, 1L);
         }
+    }
+    catch (...)
+    {
+        release();
+        throw;
     }
 }
 
-void HttpClient::send(size_t index, HttpMethod method, const char *url, std::string_view body,
-                      std::span<const char *const> headers, HttpRequest &request) noexcept
+void HttpClient::set_headers(size_t index, std::span<const char *const> headers)
 {
-    if (headers.size() > kHeadersSize) [[unlikely]]
+    const size_t size = headers.size();
+    if (headers.empty() || size > kHeadersSize) [[unlikely]]
     {
-        NLX_FATAL("nlx::network::HttpClient::send() too many headers");
+        throw std::invalid_argument("invalid http headers size");
     }
 
     Transfer &transfer = m_transfers[index];
-    transfer.request = &request;
-
-    request.size = 0;
-    request.code = 0;
-
-    for (size_t i = 0; i < headers.size(); ++i)
+    for (size_t i = 0; i < size; ++i)
     {
-        curl_slist *next = i + 1 < headers.size() ? &transfer.headers[i + 1] : nullptr;
+        curl_slist *next = i + 1 < size ? &transfer.headers[i + 1] : nullptr;
         transfer.headers[i] = { const_cast<char *>(headers[i]), next };
     }
 
-    set_option(transfer.handle, CURLOPT_URL, url);
-    set_option(transfer.handle, CURLOPT_HTTPHEADER, headers.empty() ? nullptr : transfer.headers);
-
-    if (method == HttpMethod::Get)
-    {
-        set_option(transfer.handle, CURLOPT_HTTPGET, 1L);
-    }
-    else
-    {
-        set_option(transfer.handle, CURLOPT_POSTFIELDS, body.data());
-        set_option(transfer.handle, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-    }
-
-    const CURLMcode result = curl_multi_add_handle(m_multi, transfer.handle);
-    if (result != CURLM_OK) [[unlikely]]
-    {
-        NLX_FATAL("nlx::network::HttpClient::send() curl_multi_add_handle failed");
-    }
-}
-
-void HttpClient::cancel(size_t index) noexcept
-{
-    Transfer &transfer = m_transfers[index];
-    if (transfer.request != nullptr)
-    {
-        detach(transfer);
-    }
-}
-
-void HttpClient::perform(const FileDescriptor &stop, nanoseconds timeout) noexcept
-{
-    curl_waitfd extra{};
-    extra.fd = stop.get();
-    extra.events = CURL_WAIT_POLLIN;
-
-    const int wait = static_cast<int>(std::min<long long>(detail::to_milliseconds(timeout).count(), INT_MAX));
-
-    int running = 0;
-    const CURLMcode polled = curl_multi_poll(m_multi, &extra, 1, wait, nullptr);
-    const CURLMcode performed = curl_multi_perform(m_multi, &running);
-
-    if (polled != CURLM_OK || performed != CURLM_OK) [[unlikely]]
-    {
-        NLX_FATAL("nlx::network::HttpClient::perform() curl_multi_perform failed");
-    }
-}
-
-bool HttpClient::complete(size_t &index) noexcept
-{
-    int queued = 0;
-    CURLMsg *message = curl_multi_info_read(m_multi, &queued);
-    while (message != nullptr && message->msg != CURLMSG_DONE)
-    {
-        message = curl_multi_info_read(m_multi, &queued);
-    }
-
-    if (message == nullptr)
-    {
-        return false;
-    }
-
-    index = 0;
-    while (m_transfers[index].handle != message->easy_handle)
-    {
-        ++index;
-    }
-
-    Transfer &transfer = m_transfers[index];
-    HttpRequest &request = *transfer.request;
-
-    const CURLcode result = message->data.result;
-    if (result == CURLE_OK)
-    {
-        long status = 0;
-        curl_easy_getinfo(transfer.handle, CURLINFO_RESPONSE_CODE, &status);
-        request.code = static_cast<int>(status);
-    }
-    else
-    {
-        request.code = -static_cast<int>(result);
-    }
-
-    detach(transfer);
-
-    return true;
+    easy_setopt(transfer.handle, CURLOPT_HTTPHEADER, static_cast<curl_slist *>(transfer.headers));
 }
 
 void HttpClient::wakeup() noexcept
 {
-    curl_multi_wakeup(m_multi);
-}
+    if (m_multi == nullptr) [[unlikely]]
+    {
+        NLX_FATAL("nlx::network::HttpClient::wakeup() called before initialize()");
+    }
 
-void HttpClient::detach(Transfer &transfer) noexcept
-{
-    const CURLMcode result = curl_multi_remove_handle(m_multi, transfer.handle);
+    const CURLMcode result = curl_multi_wakeup(m_multi);
     if (result != CURLM_OK) [[unlikely]]
     {
-        NLX_FATAL("nlx::network::HttpClient::detach() curl_multi_remove_handle failed");
+        NLX_FATAL("nlx::network::HttpClient::wakeup() curl_multi_wakeup failed");
     }
-
-    transfer.request = nullptr;
 }
 
-size_t HttpClient::write_response(char *data, size_t size, size_t count, void *context) noexcept
+size_t HttpClient::write_callback(char *data, size_t size, size_t nmemb, void *context) noexcept
 {
-    const Transfer &transfer = *static_cast<const Transfer *>(context);
-    HttpRequest &request = *transfer.request;
+    HttpRequest &request = *static_cast<const Transfer *>(context)->request;
 
-    const size_t bytes = size * count;
-    if (bytes > request.capacity - request.size) [[unlikely]]
+    const size_t bytes = size * nmemb;
+    const size_t available = std::min(bytes, request.capacity - request.size);
+
+    std::copy_n(data, available, request.buffer + request.size);
+    request.size += available;
+
+    if (available < bytes)
     {
+        request.truncated = true;
         return 0;
     }
-
-    std::copy_n(data, bytes, request.buffer + request.size);
-    request.size += bytes;
 
     return bytes;
 }

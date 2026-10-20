@@ -6,9 +6,9 @@
 #include "core/crypto.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
-#include "exchange/okx_rate_limiter.h"
 #include "logging/logger_node.h"
 #include "logging/logger_registry.h"
+#include "exchange/okx_rate_limiter.h"
 #include "network/http_client.h"
 
 #include <array>
@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <mutex>
 #include <string_view>
 
@@ -41,24 +42,14 @@ public:
     [[nodiscard]] bool get_balance(network::HttpRequest &request, std::string_view currency) noexcept;
     [[nodiscard]] bool get_positions(network::HttpRequest &request) noexcept;
     [[nodiscard]] bool get_pending_orders(network::HttpRequest &request, uint32_t limit) noexcept;
-
     [[nodiscard]] bool set_position_mode(network::HttpRequest &request, bool hedge) noexcept;
-    [[nodiscard]] bool set_leverage(network::HttpRequest &request, std::string_view instrument, uint32_t leverage,
-                                    std::string_view margin_mode, std::string_view position_side) noexcept;
+    [[nodiscard]] bool set_account_mode(network::HttpRequest &request, uint32_t level) noexcept;
 
 private:
     static constexpr size_t kSlotsSize = network::HttpClient::kTransfersSize;
-    static constexpr size_t kParametersCapacity = 512;
-    static constexpr size_t kLineCapacity = 1024;
-
-    static constexpr char kBaseUrl[] = "https://openapi.okx.com";
-
-    static constexpr char kKeyHeader[] = "OK-ACCESS-KEY: ";
-    static constexpr char kPassphraseHeader[] = "OK-ACCESS-PASSPHRASE: ";
-    static constexpr char kTimestampHeader[] = "OK-ACCESS-TIMESTAMP: ";
-    static constexpr char kSignatureHeader[] = "OK-ACCESS-SIGN: ";
-    static constexpr char kContentTypeHeader[] = "Content-Type: application/json";
-    static constexpr char kSimulatedHeader[] = "x-simulated-trading: 1";
+    static constexpr size_t kAllSlots = std::numeric_limits<uint8_t>::max();
+    static constexpr size_t kParametersCapacity = 256;
+    static constexpr size_t kHeaderCapacity = 64;
 
     struct Route
     {
@@ -67,60 +58,46 @@ private:
         std::string_view path;
     };
 
+    struct Slot
+    {
+        const Route *route;
+        network::HttpRequest *request;
+        
+        char parameters[kParametersCapacity];
+        size_t size;
+
+        char timestamp[kHeaderCapacity];
+        char signature[kHeaderCapacity];
+    };
+
     static constexpr Route kSystemTimeRoute{ HttpSystemTime, network::HttpMethod::Get, "/api/v5/public/time" };
     static constexpr Route kAccountConfigRoute{ HttpAccountConfig, network::HttpMethod::Get, "/api/v5/account/config" };
     static constexpr Route kBalanceRoute{ HttpBalance, network::HttpMethod::Get, "/api/v5/account/balance" };
     static constexpr Route kPositionsRoute{ HttpPositions, network::HttpMethod::Get, "/api/v5/account/positions" };
     static constexpr Route kPendingOrdersRoute{ HttpPendingOrders, network::HttpMethod::Get, "/api/v5/trade/orders-pending" };
     static constexpr Route kSetPositionModeRoute{ HttpSetPositionMode, network::HttpMethod::Post, "/api/v5/account/set-position-mode" };
-    static constexpr Route kSetLeverageRoute{ HttpSetLeverage, network::HttpMethod::Post, "/api/v5/account/set-leverage" };
-
-    enum class SlotState : uint8_t
-    {
-        Free,
-        Queued,
-        Running
-    };
-
-    struct Slot
-    {
-        SlotState state;
-        bool throttled;
-        const Route *route;
-        network::HttpRequest *request;
-        OkxRateLimiter::Ticket ticket;
-        nanoseconds sent;
-        size_t size;
-        char parameters[kParametersCapacity];
-        char timestamp[sizeof(kTimestampHeader) - 1 + time::iso8601_ms_size];
-        char signature[sizeof(kSignatureHeader) - 1 + crypto::hmac_sha256_base64_size];
-    };
+    static constexpr Route kSetAccountModeRoute{ HttpSetAccountMode, network::HttpMethod::Post, "/api/v5/account/set-account-level" };
 
     logging::LoggerNode m_log;
     OkxRateLimiter &m_limiter;
-
-    char m_key[sizeof(kKeyHeader) - 1 + Credentials::kApiFieldCapacity];
-    char m_passphrase[sizeof(kPassphraseHeader) - 1 + Credentials::kApiFieldCapacity];
-    char m_secret[Credentials::kApiFieldCapacity];
-    bool m_simulated;
-
-    std::mutex m_lock;
-    std::array<Slot, kSlotsSize> m_slots;
-    uint32_t m_rejected;
 
     FileDescriptor m_stop;
     std::atomic<bool> m_initialized;
 
     network::HttpClient m_http_client;
 
-    template<typename ...Args>
-    bool push(const Route &route, network::HttpRequest &request, std::format_string<Args...> format, Args &&...args) noexcept;
+    char m_key[kHeaderCapacity];
+    char m_passphrase[kHeaderCapacity];
+    char m_simulated[kHeaderCapacity];
+    char m_secret[Credentials::kApiFieldCapacity];
 
-    nanoseconds launch() noexcept;
-    void send(size_t index, nanoseconds now) noexcept;
-    void complete() noexcept;
-    void abort_requests() noexcept;
-    void release(Slot &slot) noexcept;
+    std::array<Slot, kSlotsSize> m_slots;
+    uint8_t m_busy;
+    uint8_t m_launched;
+
+    std::mutex m_lock;
+
+    bool push(const Route &route, network::HttpRequest &request, std::string_view parameters) noexcept;
 };
 
 } // namespace nlx::exchange

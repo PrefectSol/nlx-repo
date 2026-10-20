@@ -26,7 +26,7 @@ int main(int argc, const char *argv[])
             config = nlx::Config::load(argv[1]);
         }
 
-        std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(std::move(config), std::move(credentials));
+        std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(config, credentials);
         return supervisor->start();
     }
     catch (const std::exception &exp)

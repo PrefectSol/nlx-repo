@@ -23,23 +23,18 @@ enum class HttpMethod : uint8_t
 
 struct HttpRequest
 {
-    static constexpr int kAborted = -CURLE_ABORTED_BY_CALLBACK;
-    static constexpr int kOverflow = -CURLE_WRITE_ERROR;
-
     char *buffer;
     size_t capacity;
     size_t size;
     int code;
+    bool truncated;
     const FileDescriptor &notify;
 };
 
 class HttpClient
 {
 public:
-    static constexpr size_t kTransfersSize = 8;
-    static constexpr size_t kHeadersSize = 8;
-
-    HttpClient() noexcept;
+    HttpClient();
     ~HttpClient() noexcept;
 
     HttpClient(const HttpClient &) = delete;
@@ -48,15 +43,12 @@ public:
     HttpClient &operator=(HttpClient &&) = delete;
 
     void initialize();
-
-    void send(size_t index, HttpMethod method, const char *url, std::string_view body,
-              std::span<const char *const> headers, HttpRequest &request) noexcept;
-    void cancel(size_t index) noexcept;
-
-    void perform(const FileDescriptor &stop, nanoseconds timeout) noexcept;
-    [[nodiscard]] bool complete(size_t &index) noexcept;
+    void set_headers(size_t index, std::span<const char *const> headers); 
 
     void wakeup() noexcept;
+
+    static constexpr size_t kTransfersSize = sizeof(uint8_t) * 8;
+    static constexpr size_t kHeadersSize = 8;
 
 private:
     static constexpr milliseconds kTimeout{ 5000 };
@@ -71,13 +63,11 @@ private:
     CURLM *m_multi;
     std::array<Transfer, kTransfersSize> m_transfers;
 
-    void detach(Transfer &transfer) noexcept;
+    void release() noexcept;
+    void release_handle(CURL *handle) noexcept;
 
-    template<typename T>
-    static void set_option(CURL *handle, CURLoption option, T value) noexcept;
-
-    static size_t write_response(char *data, size_t size, size_t count, void *context) noexcept;
+    static size_t write_callback(char *data, size_t size, size_t nmemb, void *context) noexcept;
 };
 
-} // namespace nlx::network
+} // nlx::network
 #endif // !NLX_NETWORK_HTTP_CLIENT_H

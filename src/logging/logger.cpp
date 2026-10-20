@@ -63,8 +63,8 @@ constexpr bool validate_name(std::string_view name) noexcept
 
 } // namespace
 
-Logger::Logger(LoggerConfig config) :
-    m_config(std::move(config)),
+Logger::Logger(const LoggerConfig &config) :
+    m_config(config),
     m_initialized(false),
     m_epoll(),
     m_notify(),

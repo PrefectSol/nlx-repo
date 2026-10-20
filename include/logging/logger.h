@@ -19,7 +19,7 @@ class LoggerRegistry;
 class Logger
 {
 public:
-    explicit Logger(LoggerConfig config);
+    explicit Logger(const LoggerConfig &config);
 
     Logger(const Logger &) = delete;
     Logger &operator=(const Logger &) = delete;

@@ -8,7 +8,7 @@ namespace nlx
 
 struct Credentials
 {
-    static constexpr size_t kApiFieldCapacity = 128;
+    static constexpr size_t kApiFieldCapacity = 64;
 
     char api_key[kApiFieldCapacity];
     char api_secret[kApiFieldCapacity];
