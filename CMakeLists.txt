@@ -109,7 +109,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
-    CA_CERT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/certs/cacert.pem"
+    CA_CERT_PATH="certs/cacert.pem"
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

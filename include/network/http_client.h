@@ -9,17 +9,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string_view>
 
 namespace nlx::network
 {
-
-enum class HttpMethod : uint8_t
-{
-    Get,
-    Post
-};
 
 struct HttpRequest
 {
@@ -29,6 +24,19 @@ struct HttpRequest
     int code;
     bool truncated;
     const FileDescriptor &notify;
+};
+
+struct HttpResult
+{
+    int error;
+    int status;
+    bool sent;
+    const char *message;
+
+    nanoseconds elapsed;
+    nanoseconds resolve;
+    nanoseconds connect;
+    nanoseconds handshake;
 };
 
 class HttpClient
@@ -43,11 +51,19 @@ public:
     HttpClient &operator=(HttpClient &&) = delete;
 
     void initialize();
-    void set_headers(size_t index, std::span<const char *const> headers); 
+    void set_headers(size_t index, std::span<const char *const> headers);
+
+    void launch(size_t index, bool post, const char *url, std::string_view body, HttpRequest &request) noexcept;
+    void perform() noexcept;
+    [[nodiscard]] bool read(size_t &index, HttpResult &result) noexcept;
+    [[nodiscard]] bool poll(milliseconds timeout, const FileDescriptor &fd) noexcept;
 
     void wakeup() noexcept;
+    void release() noexcept;
 
-    static constexpr size_t kTransfersSize = sizeof(uint8_t) * 8;
+    using SlotMask = uint8_t;
+
+    static constexpr size_t kTransfersSize = std::numeric_limits<SlotMask>::digits;
     static constexpr size_t kHeadersSize = 8;
 
 private:
@@ -58,15 +74,18 @@ private:
         CURL *handle;
         HttpRequest *request;
         curl_slist headers[kHeadersSize];
+        char error[CURL_ERROR_SIZE];
+        bool sent;
     };
 
     CURLM *m_multi;
     std::array<Transfer, kTransfersSize> m_transfers;
 
-    void release() noexcept;
+    void destroy() noexcept;
     void release_handle(CURL *handle) noexcept;
 
     static size_t write_callback(char *data, size_t size, size_t nmemb, void *context) noexcept;
+    static int prereq_callback(void *context, char *primary_ip, char *local_ip, int primary_port, int local_port) noexcept;
 };
 
 } // nlx::network

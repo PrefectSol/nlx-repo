@@ -3,7 +3,6 @@
 
 #include "core/config.h"
 #include "core/credentials.h"
-#include "core/crypto.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
 #include "logging/logger_node.h"
@@ -16,8 +15,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
-#include <limits>
-#include <mutex>
 #include <string_view>
 
 namespace nlx::exchange
@@ -46,15 +43,17 @@ public:
     [[nodiscard]] bool set_account_mode(network::HttpRequest &request, uint32_t level) noexcept;
 
 private:
-    static constexpr size_t kSlotsSize = network::HttpClient::kTransfersSize;
-    static constexpr size_t kAllSlots = std::numeric_limits<uint8_t>::max();
+    using SlotMask = network::HttpClient::SlotMask;
+
     static constexpr size_t kParametersCapacity = 256;
     static constexpr size_t kHeaderCapacity = 64;
+
+    static constexpr std::string_view kBaseUrl = "https://openapi.okx.com";
 
     struct Route
     {
         OkxRequest request;
-        network::HttpMethod method;
+        bool post;
         std::string_view path;
     };
 
@@ -62,7 +61,7 @@ private:
     {
         const Route *route;
         network::HttpRequest *request;
-        
+
         char parameters[kParametersCapacity];
         size_t size;
 
@@ -70,19 +69,20 @@ private:
         char signature[kHeaderCapacity];
     };
 
-    static constexpr Route kSystemTimeRoute{ HttpSystemTime, network::HttpMethod::Get, "/api/v5/public/time" };
-    static constexpr Route kAccountConfigRoute{ HttpAccountConfig, network::HttpMethod::Get, "/api/v5/account/config" };
-    static constexpr Route kBalanceRoute{ HttpBalance, network::HttpMethod::Get, "/api/v5/account/balance" };
-    static constexpr Route kPositionsRoute{ HttpPositions, network::HttpMethod::Get, "/api/v5/account/positions" };
-    static constexpr Route kPendingOrdersRoute{ HttpPendingOrders, network::HttpMethod::Get, "/api/v5/trade/orders-pending" };
-    static constexpr Route kSetPositionModeRoute{ HttpSetPositionMode, network::HttpMethod::Post, "/api/v5/account/set-position-mode" };
-    static constexpr Route kSetAccountModeRoute{ HttpSetAccountMode, network::HttpMethod::Post, "/api/v5/account/set-account-level" };
+    static constexpr Route kSystemTimeRoute{ HttpSystemTime, false, "/api/v5/public/time" };
+    static constexpr Route kAccountConfigRoute{ HttpAccountConfig, false, "/api/v5/account/config" };
+    static constexpr Route kBalanceRoute{ HttpBalance, false, "/api/v5/account/balance" };
+    static constexpr Route kPositionsRoute{ HttpPositions, false, "/api/v5/account/positions" };
+    static constexpr Route kPendingOrdersRoute{ HttpPendingOrders, false, "/api/v5/trade/orders-pending" };
+    static constexpr Route kSetPositionModeRoute{ HttpSetPositionMode, true, "/api/v5/account/set-position-mode" };
+    static constexpr Route kSetAccountModeRoute{ HttpSetAccountMode, true, "/api/v5/account/set-account-level" };
 
     logging::LoggerNode m_log;
     OkxRateLimiter &m_limiter;
 
     FileDescriptor m_stop;
     std::atomic<bool> m_initialized;
+    std::atomic<bool> m_stopped;
 
     network::HttpClient m_http_client;
 
@@ -91,13 +91,25 @@ private:
     char m_simulated[kHeaderCapacity];
     char m_secret[Credentials::kApiFieldCapacity];
 
-    std::array<Slot, kSlotsSize> m_slots;
-    uint8_t m_busy;
-    uint8_t m_launched;
+    std::array<Slot, network::HttpClient::kTransfersSize> m_slots;
 
-    std::mutex m_lock;
+    std::atomic<SlotMask> m_busy;
+    std::atomic<SlotMask> m_ready;
 
-    bool push(const Route &route, network::HttpRequest &request, std::string_view parameters) noexcept;
+    SlotMask m_launched;
+    SlotMask m_frozen;
+    nanoseconds m_thaw;
+
+    template<typename ...Args>
+    bool push(const Route &route, network::HttpRequest &request, std::format_string<Args...> format, Args &&...args) noexcept;
+
+    bool claim(size_t &index) noexcept;
+    void vacate(size_t index) noexcept;
+
+    milliseconds schedule() noexcept;
+    void dispatch(size_t index) noexcept;
+    void complete() noexcept;
+    void release() noexcept;
 };
 
 } // namespace nlx::exchange

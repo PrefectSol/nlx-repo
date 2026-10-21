@@ -11,3 +11,4 @@ logs/
 build
 .env
 notes.md
+claude/

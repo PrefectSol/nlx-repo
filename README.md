@@ -30,10 +30,10 @@ custom configuration from `default.cfg`
 ## tools
 cpu cores isolation:
  ```bash
-sudo sh ./scripts/isolate_cpu.sh
+sudo bash ./scripts/isolate_cpu.sh
 ```
 
 update ca bundle:
 ```bash
-sh ./scripts/update_certs.sh ./certs/cacert.pem 
+bash ./scripts/update_certs.sh ./certs/cacert.pem
 ```
