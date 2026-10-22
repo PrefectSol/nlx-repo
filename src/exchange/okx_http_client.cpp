@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -49,6 +50,7 @@ OkxHttpClient::OkxHttpClient(const OkxConfig &config, const Credentials &credent
     m_initialized(false),
     m_stopped(false),
     m_http_client(),
+    m_url(),
     m_key(),
     m_passphrase(),
     m_simulated(),
@@ -62,7 +64,13 @@ OkxHttpClient::OkxHttpClient(const OkxConfig &config, const Credentials &credent
 {
     m_log = registry.create_node("okx_http");
 
-    const auto key = std::format_to_n(m_key, sizeof(m_key) - 1, "OK-ACCESS-KEY: {}", credentials.api_key);
+    const std::string_view url(config.url, ::strnlen(config.url, sizeof(config.url)));
+    if (url.empty() || !string::safe_strcpy(m_url, url)) [[unlikely]]
+    {
+        throw std::invalid_argument("okx url is invalid");
+    }
+
+    const auto key =std::format_to_n(m_key, sizeof(m_key) - 1, "OK-ACCESS-KEY: {}", credentials.api_key);
     if (static_cast<size_t>(key.size) >= kHeaderCapacity) [[unlikely]]
     {
         throw std::invalid_argument("okx header api key is too long");
@@ -238,6 +246,16 @@ bool OkxHttpClient::get_pending_orders(network::HttpRequest &request, uint32_t l
     return push(kPendingOrdersRoute, request, "?limit={}", limit);
 }
 
+bool OkxHttpClient::get_instruments(network::HttpRequest &request, std::string_view type) noexcept
+{
+    return push(kInstrumentsRoute, request, "?instType={}", type);
+}
+
+bool OkxHttpClient::get_candles(network::HttpRequest &request, std::string_view instrument, std::string_view bar, milliseconds after, uint32_t limit) noexcept
+{
+    return push(kCandlesRoute, request, "?instId={}&bar={}&after={}&limit={}", instrument, bar, after.count(), limit);
+}
+
 bool OkxHttpClient::set_position_mode(network::HttpRequest &request, bool hedge) noexcept
 {
     const std::string_view body = hedge ? R"({"posMode":"long_short_mode"})" : R"({"posMode":"net_mode"})";
@@ -284,8 +302,6 @@ milliseconds OkxHttpClient::schedule() noexcept
 
 void OkxHttpClient::dispatch(size_t index) noexcept
 {
-    static_assert(kBaseUrl.size() < time::iso8601_ms_size);
-
     Slot &slot = m_slots[index];
     const Route &route = *slot.route;
 
@@ -308,8 +324,8 @@ void OkxHttpClient::dispatch(size_t index) noexcept
     const std::string_view path = route.post ? route.path : std::string_view(target, end);
     const std::string_view body = route.post ? std::string_view(target + route.path.size(), end) : std::string_view();
 
-    char url[kParametersCapacity];
-    const auto address = std::format_to_n(url, kParametersCapacity - 1, "{}{}", kBaseUrl, path);
+    char url[kUrlCapacity];
+    const auto address = std::format_to_n(url, kUrlCapacity - 1, "{}{}", std::string_view(m_url), path);
     *address.out = '\0';
 
     m_http_client.launch(index, route.post, url, body, *slot.request);

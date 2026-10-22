@@ -37,7 +37,9 @@ template<size_t N>
 
 [[nodiscard]] std::array<char, time::iso8601_ms_size> format_iso8601_ms(nanoseconds timestamp) noexcept;
 
+[[nodiscard]] constexpr timespec to_timespec(nanoseconds value) noexcept;
 [[nodiscard]] constexpr itimerspec to_itimerspec(milliseconds interval) noexcept;
+[[nodiscard]] constexpr itimerspec to_itimerspec(milliseconds interval, milliseconds delay) noexcept;
 [[nodiscard]] constexpr milliseconds to_milliseconds(nanoseconds interval) noexcept;
 
 } // namespace nlx::detail
@@ -61,16 +63,31 @@ std::string_view format_time(char (&buffer)[N],
     return { buffer, static_cast<size_t>(result.out - buffer) };
 }
 
+constexpr timespec to_timespec(nanoseconds value) noexcept
+{
+    const std::chrono::seconds secs = std::chrono::duration_cast<std::chrono::seconds>(value);
+    const std::chrono::nanoseconds nsecs = value - secs;
+
+    timespec spec{};
+    spec.tv_sec = secs.count();
+    spec.tv_nsec = nsecs.count();
+
+    return spec;
+}
+
 constexpr itimerspec to_itimerspec(milliseconds interval) noexcept
 {
-    const std::chrono::seconds secs = std::chrono::duration_cast<std::chrono::seconds>(interval);
-    const std::chrono::nanoseconds nsecs = std::chrono::duration_cast<std::chrono::nanoseconds>(interval - secs);
+    return to_itimerspec(interval, interval);
+}
+
+constexpr itimerspec to_itimerspec(milliseconds interval, milliseconds delay) noexcept
+{
+    const nanoseconds first = delay > milliseconds::zero() ? nanoseconds(delay) : nanoseconds(1);
 
     itimerspec spec{};
-    spec.it_value.tv_sec = secs.count();
-    spec.it_value.tv_nsec = nsecs.count();
-    spec.it_interval = spec.it_value;
-    
+    spec.it_value = to_timespec(first);
+    spec.it_interval = to_timespec(interval);
+
     return spec;
 }
 

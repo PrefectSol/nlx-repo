@@ -112,16 +112,21 @@ FileDescriptor FileDescriptor::make_eventfd(bool nonblocking)
 
 FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, bool nonblocking)
 {
+    return make_timerfd(interval, interval, nonblocking);
+}
+
+FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, milliseconds delay, bool nonblocking)
+{
     const int flags = TFD_CLOEXEC | (nonblocking ? TFD_NONBLOCK : 0);
     const int fd = ::timerfd_create(CLOCK_MONOTONIC, flags);
     if (fd < 0) [[unlikely]]
     {
         throw SystemError("timerfd_create failed");
     }
-    
+
     FileDescriptor descriptor(fd);
-    
-    const itimerspec spec = detail::to_itimerspec(interval);
+
+    const itimerspec spec = detail::to_itimerspec(interval, delay);
     const int result = ::timerfd_settime(descriptor.get(), 0, &spec, nullptr);
     if (result != 0) [[unlikely]]
     {

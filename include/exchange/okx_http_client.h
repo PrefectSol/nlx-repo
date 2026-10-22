@@ -39,6 +39,8 @@ public:
     [[nodiscard]] bool get_balance(network::HttpRequest &request, std::string_view currency) noexcept;
     [[nodiscard]] bool get_positions(network::HttpRequest &request) noexcept;
     [[nodiscard]] bool get_pending_orders(network::HttpRequest &request, uint32_t limit) noexcept;
+    [[nodiscard]] bool get_instruments(network::HttpRequest &request, std::string_view type) noexcept;
+    [[nodiscard]] bool get_candles(network::HttpRequest &request, std::string_view instrument, std::string_view bar, milliseconds after, uint32_t limit) noexcept;
     [[nodiscard]] bool set_position_mode(network::HttpRequest &request, bool hedge) noexcept;
     [[nodiscard]] bool set_account_mode(network::HttpRequest &request, uint32_t level) noexcept;
 
@@ -47,8 +49,7 @@ private:
 
     static constexpr size_t kParametersCapacity = 256;
     static constexpr size_t kHeaderCapacity = 64;
-
-    static constexpr std::string_view kBaseUrl = "https://openapi.okx.com";
+    static constexpr size_t kUrlCapacity = OkxConfig::kCapacity + kParametersCapacity;
 
     struct Route
     {
@@ -74,6 +75,8 @@ private:
     static constexpr Route kBalanceRoute{ HttpBalance, false, "/api/v5/account/balance" };
     static constexpr Route kPositionsRoute{ HttpPositions, false, "/api/v5/account/positions" };
     static constexpr Route kPendingOrdersRoute{ HttpPendingOrders, false, "/api/v5/trade/orders-pending" };
+    static constexpr Route kInstrumentsRoute{ HttpInstruments, false, "/api/v5/public/instruments" };
+    static constexpr Route kCandlesRoute{ HttpCandles, false, "/api/v5/market/candles" };
     static constexpr Route kSetPositionModeRoute{ HttpSetPositionMode, true, "/api/v5/account/set-position-mode" };
     static constexpr Route kSetAccountModeRoute{ HttpSetAccountMode, true, "/api/v5/account/set-account-level" };
 
@@ -86,6 +89,7 @@ private:
 
     network::HttpClient m_http_client;
 
+    char m_url[OkxConfig::kCapacity];
     char m_key[kHeaderCapacity];
     char m_passphrase[kHeaderCapacity];
     char m_simulated[kHeaderCapacity];

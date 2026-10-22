@@ -1,4 +1,5 @@
 #include "parsing/json_reader.h"
+#include "core/string.h"
 
 #include <simdjson.h>
 
@@ -208,6 +209,138 @@ bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept
     }
 
     count = data.size();
+
+    return true;
+}
+
+bool okx_parse_linear_swaps(std::string_view json, int &code, std::string_view settle, std::string_view category, milliseconds listed_before,
+                            std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept
+{
+    simdjson::dom::array data;
+    if (!parse(json, code, data))
+    {
+        return false;
+    }
+
+    if (code != 0)
+    {
+        return true;
+    }
+
+    count = 0;
+    ignored = 0;
+
+    for (const simdjson::dom::element instrument : data)
+    {
+        std::string_view id;
+        std::string_view currency;
+        std::string_view type;
+        std::string_view state;
+        std::string_view rule;
+        std::string_view group;
+        std::string_view expiry;
+        std::string_view listing;
+        std::string_view value;
+
+        const bool parsed = instrument["instId"].get(id) == simdjson::SUCCESS &&
+                            instrument["settleCcy"].get(currency) == simdjson::SUCCESS &&
+                            instrument["ctType"].get(type) == simdjson::SUCCESS &&
+                            instrument["state"].get(state) == simdjson::SUCCESS &&
+                            instrument["ruleType"].get(rule) == simdjson::SUCCESS &&
+                            instrument["instCategory"].get(group) == simdjson::SUCCESS &&
+                            instrument["expTime"].get(expiry) == simdjson::SUCCESS &&
+                            instrument["listTime"].get(listing) == simdjson::SUCCESS &&
+                            instrument["ctVal"].get(value) == simdjson::SUCCESS;
+
+        if (!parsed)
+        {
+            return false;
+        }
+
+        const bool eligible = currency == settle && type == "linear" && state == "live" && rule == "normal" && group == category && expiry.empty();
+        if (!eligible)
+        {
+            continue;
+        }
+
+        int64_t list_time = 0;
+        double contract_value = 0.0;
+        if (!to_number(listing, list_time) || !to_number(value, contract_value))
+        {
+            return false;
+        }
+
+        if (milliseconds(list_time) > listed_before)
+        {
+            continue;
+        }
+
+        if (count == instruments.size())
+        {
+            ++ignored;
+            continue;
+        }
+
+        exchange::OkxInstrument &target = instruments[count];
+        if (!string::safe_strcpy(target.id, id))
+        {
+            ++ignored;
+            continue;
+        }
+
+        target.contract_value = contract_value;
+        target.list_time = milliseconds(list_time);
+        ++count;
+    }
+
+    return true;
+}
+
+bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxCandle> candles, size_t &count) noexcept
+{
+    simdjson::dom::array data;
+    if (!parse(json, code, data))
+    {
+        return false;
+    }
+
+    if (code != 0)
+    {
+        return true;
+    }
+
+    count = 0;
+
+    for (const simdjson::dom::element row : data)
+    {
+        if (count == candles.size())
+        {
+            return false;
+        }
+
+        simdjson::dom::array fields;
+        std::string_view stamp;
+        std::string_view volume;
+        std::string_view confirm;
+
+        const bool parsed = row.get(fields) == simdjson::SUCCESS &&
+                            fields.at(0).get(stamp) == simdjson::SUCCESS &&
+                            fields.at(7).get(volume) == simdjson::SUCCESS &&
+                            fields.at(8).get(confirm) == simdjson::SUCCESS;
+
+        int64_t timestamp = 0;
+        double quote_volume = 0.0;
+        if (!parsed || !to_number(stamp, timestamp) || !to_number(volume, quote_volume))
+        {
+            return false;
+        }
+
+        exchange::OkxCandle &candle = candles[count];
+        candle.time = milliseconds(timestamp);
+        candle.quote_volume = quote_volume;
+        candle.confirmed = confirm == "1";
+        ++count;
+    }
 
     return true;
 }

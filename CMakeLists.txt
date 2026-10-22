@@ -76,6 +76,7 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/network/http_client.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/env_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/json_reader.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/service/liquid_filter.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/strategy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/supervisor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"

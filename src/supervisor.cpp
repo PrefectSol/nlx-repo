@@ -44,7 +44,7 @@ Supervisor::Supervisor(const Config &config, const Credentials &credentials) :
     m_log(),
     m_okx_rate_limiter(),
     m_okx_http_client(m_config.okx, m_credentials, m_okx_rate_limiter, m_registry),
-    m_strategy(m_okx_http_client, m_registry),
+    m_strategy(m_config.strategy, m_okx_http_client, m_registry),
     m_logger_thread(),
     m_okx_http_thread(),
     m_strategy_thread(),
@@ -115,7 +115,10 @@ int Supervisor::start()
     m_log.log("logger directory = {}", m_config.logger.directory);
     m_log.log("logger rotation minutes = {}", m_config.logger.rotation_minutes);
     m_log.log("logger flush ms = {}", m_config.logger.flush_ms);
+    m_log.log("okx url = {}", m_config.okx.url);
     m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
+    m_log.log("strategy instruments refresh minutes = {}", m_config.strategy.instruments_refresh_minutes);
+    m_log.log("strategy liquidity window days = {}", m_config.strategy.liquidity_window_days);
     m_log.flush();
 
     epoll_event event{};

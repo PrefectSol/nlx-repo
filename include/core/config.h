@@ -8,22 +8,32 @@ namespace nlx
 
 struct LoggerConfig
 {
-    static constexpr size_t kPathCapacity = 128;
+    static constexpr size_t kCapacity = 128;
 
-    char directory[kPathCapacity];
+    char directory[kCapacity];
     int rotation_minutes;
     int flush_ms;
 };
 
 struct OkxConfig
 {
+    static constexpr size_t kCapacity = 128;
+
+    char url[kCapacity];
     bool simulated;
+};
+
+struct StrategyConfig
+{
+    int instruments_refresh_minutes;
+    int liquidity_window_days;
 };
 
 struct Config
 {
     LoggerConfig logger;
     OkxConfig okx;
+    StrategyConfig strategy;
 
     Config();
 
