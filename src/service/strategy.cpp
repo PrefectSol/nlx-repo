@@ -1,6 +1,7 @@
 #include "service/strategy.h"
 #include "core/fatal.h"
 #include "core/time.h"
+#include "core/cpu.h"
 #include "parsing/json_reader.h"
 
 #include <array>
@@ -30,9 +31,10 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, logging::LoggerRegi
 
 void Strategy::initialize()
 {
-    static_assert(kBufferCapacity > parsing::json_padding_size);
+    constexpr size_t buffer_capacity = 256 * 1024;
+    static_assert(buffer_capacity > parsing::json_padding_size);
     
-    char buffer[kBufferCapacity];
+    char buffer[buffer_capacity];
     network::HttpRequest request{ buffer, sizeof(buffer) - parsing::json_padding_size, 0, 0, false, m_okx_notify };
 
     int code = -1;
@@ -126,6 +128,12 @@ void Strategy::start() noexcept
     if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
     {
         NLX_FATAL("nlx::service::Strategy::start() called before initialize()");
+    }
+
+    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-strategy");
+    if (!success) [[unlikely]]
+    {
+        NLX_FATAL("nlx::service::Strategy::start() cpu::set_name failed");
     }
 
     m_log.log("strategy started");

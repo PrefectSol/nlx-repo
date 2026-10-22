@@ -3,6 +3,8 @@
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "core/system_error.h"
+#include "core/cpu.h"
+#include "core/fatal.h"
 #include "logging/logger_registry.h"
 
 #include <sys/epoll.h>
@@ -12,7 +14,6 @@
 #include <thread>
 #include <csignal>
 #include <stdexcept>
-#include <utility>
 
 namespace nlx
 {
@@ -95,6 +96,12 @@ Supervisor::~Supervisor()
 
 int Supervisor::start()
 {
+    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-supervisor");
+    if (!success) [[unlikely]]
+    {
+        NLX_FATAL("nlx::Supervisor::start() cpu::set_name failed");
+    }
+
     m_logger.initialize();
     m_logger_thread = std::thread([this] { m_logger.start(); });
 

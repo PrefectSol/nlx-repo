@@ -31,7 +31,7 @@ int main(int argc, const char *argv[])
     }
     catch (const std::exception &exp)
     {
-        std::cerr << "unexpected exception from supervisor:\n  " << exp.what() << std::endl;
+        std::cerr << "unexpected exception from supervisor:\n" << exp.what() << std::endl;
     }
 
     return 1;

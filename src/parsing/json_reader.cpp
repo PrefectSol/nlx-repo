@@ -195,7 +195,9 @@ bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexce
 bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+    
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }

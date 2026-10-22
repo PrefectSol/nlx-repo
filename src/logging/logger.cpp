@@ -7,6 +7,7 @@
 #include "core/fatal.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
+#include "core/cpu.h"
 
 #include <linux/limits.h>
 
@@ -138,6 +139,12 @@ void Logger::start() noexcept
         NLX_FATAL("nlx::logging::Logger::start() called before initialize()");
     }
 
+    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-logger");
+    if (!success) [[unlikely]]
+    {
+        NLX_FATAL("nlx::logging::Logger::start() cpu::set_name failed");
+    }
+
     epoll_event event{};
     while (true)
     {
@@ -206,7 +213,8 @@ size_t Logger::drain_module(Module &module) noexcept
 
 void Logger::write_record(Module &module, const LogRecord &record) noexcept
 {
-    if (record.timestamp >= module.rotation + minutes(m_config.rotation_minutes)) [[unlikely]]
+    const nanoseconds interval = module.rotation + minutes(m_config.rotation_minutes);
+    if (record.timestamp >= interval) [[unlikely]]
     {
         rotate(module, record.timestamp);
     }

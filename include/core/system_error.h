@@ -14,7 +14,7 @@ public:
     explicit SystemError(int error, std::string message);
 
 private:
-    [[nodiscard]] static int capture_errno() noexcept;
+    static int capture_errno() noexcept;
 };
 
 } // namespace nlx

@@ -2,6 +2,7 @@
 #include "core/crypto.h"
 #include "core/fatal.h"
 #include "core/string.h"
+#include "core/cpu.h"
 
 #include <algorithm>
 #include <bit>
@@ -88,7 +89,8 @@ void OkxHttpClient::initialize()
 {
     m_http_client.initialize();
 
-    for (size_t index = 0; index < m_slots.size(); ++index)
+    const size_t size = m_slots.size();
+    for (size_t index = 0; index < size; ++index)
     {
         Slot &slot = m_slots[index];
 
@@ -102,6 +104,41 @@ void OkxHttpClient::initialize()
 void OkxHttpClient::request_stop() noexcept
 {
     nlx::detail::notify(m_stop);
+}
+
+void OkxHttpClient::start() noexcept
+{
+    if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
+    {
+        NLX_FATAL("nlx::exchange::OkxHttpClient::start() called before initialize()");
+    }
+
+    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-okx_http");
+    if (!success) [[unlikely]]
+    {
+        NLX_FATAL("nlx::exchange::OkxHttpClient::start() cpu::set_name failed");
+    }
+
+    m_log.log("okx http client started");
+    m_log.flush();
+
+    while (true)
+    {
+        const milliseconds timeout = schedule();
+
+        m_http_client.perform();
+        complete();
+
+        if (m_http_client.poll(timeout, m_stop))
+        {
+            break;
+        }
+    }
+
+    release();
+
+    m_log.log("okx http client stopped");
+    m_log.flush();
 }
 
 template <typename ...Args>
@@ -158,7 +195,8 @@ bool OkxHttpClient::claim(size_t &index) noexcept
             return false;
         }
     }
-    while (!m_busy.compare_exchange_weak(busy, static_cast<SlotMask>(busy | bit(index)), std::memory_order_seq_cst, std::memory_order_relaxed));
+    while (!m_busy.compare_exchange_weak(busy, static_cast<SlotMask>(busy | bit(index)),
+                                         std::memory_order_seq_cst, std::memory_order_relaxed));
 
     if (m_stopped.load(std::memory_order_seq_cst)) [[unlikely]]
     {
@@ -209,35 +247,6 @@ bool OkxHttpClient::set_position_mode(network::HttpRequest &request, bool hedge)
 bool OkxHttpClient::set_account_mode(network::HttpRequest &request, uint32_t level) noexcept
 {
     return push(kSetAccountModeRoute, request, R"({{"acctLv":"{}"}})", level);
-}
-
-void OkxHttpClient::start() noexcept
-{
-    if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
-    {
-        NLX_FATAL("nlx::exchange::OkxHttpClient::start() called before initialize()");
-    }
-
-    m_log.log("okx http client started");
-    m_log.flush();
-
-    while (true)
-    {
-        const milliseconds timeout = schedule();
-
-        m_http_client.perform();
-        complete();
-
-        if (m_http_client.poll(timeout, m_stop))
-        {
-            break;
-        }
-    }
-
-    release();
-
-    m_log.log("okx http client stopped");
-    m_log.flush();
 }
 
 milliseconds OkxHttpClient::schedule() noexcept
@@ -320,8 +329,10 @@ void OkxHttpClient::complete() noexcept
 
         if (request.code == -1) [[unlikely]]
         {
-            m_log.log<logging::LogLevel::Error>("okx http {} failed in {} ms: curl = {}, http = {}, {}", route.path, ms(result.elapsed), result.error, result.status, result.message);
-            m_log.log<logging::LogLevel::Error>("okx http {} stages: sent = {}, resolve = {} ms, connect = {} ms, handshake = {} ms", route.path, result.sent, ms(result.resolve), ms(result.connect), ms(result.handshake));
+            m_log.log<logging::LogLevel::Error>("okx http {} failed in {} ms: curl = {}, http = {}, {}",
+                                                route.path, ms(result.elapsed), result.error, result.status, result.message);
+            m_log.log<logging::LogLevel::Error>("okx http {} stages: sent = {}, resolve = {} ms, connect = {} ms, handshake = {} ms",
+                                                route.path, result.sent, ms(result.resolve), ms(result.connect), ms(result.handshake));
         }
         else
         {
@@ -389,7 +400,7 @@ void OkxHttpClient::release() noexcept
     m_frozen = 0;
     m_thaw = nanoseconds::max();
 
-    static_cast<void>(nlx::detail::drain(m_stop));
+    [[maybe_unused]] const uint64_t result = nlx::detail::drain(m_stop);
 }
 
 } // namespace nlx::exchange

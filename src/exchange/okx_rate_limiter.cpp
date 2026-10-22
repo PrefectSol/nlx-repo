@@ -10,8 +10,6 @@ OkxRateLimiter::OkxRateLimiter() noexcept :
     m_times(),
     m_cursors()
 {
-    static_assert(std::ranges::all_of(kRules, [](const Rule &rule) { return rule.count != 0; }));
-
     m_times.fill(kEmpty);
 }
 

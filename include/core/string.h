@@ -160,7 +160,7 @@ void BoundedLine<Capacity>::append(T value) noexcept
 template <size_t Capacity>
 void BoundedLine<Capacity>::append(const char *text) noexcept
 {
-    append(text != nullptr ? std::string_view(text) : std::string_view("(null)"));
+    append(text != nullptr ? std::string_view(text) : std::string_view("(nullptr)"));
 }
 
 template <size_t Capacity>

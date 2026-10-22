@@ -30,8 +30,6 @@ public:
     void request_stop() noexcept;
 
 private:
-    static constexpr size_t kBufferCapacity = 256 * 1024;
-
     logging::LoggerNode m_log;
     exchange::OkxHttpClient &m_okx_http_client;
 
