@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <type_traits>
 #include <algorithm>
+#include <span>
 
 #ifndef NO_USE_STDC_HARDWARE_DESTRUCTIVE_INTERFERENCE_SIZE
 #include <new>
@@ -37,8 +38,8 @@ public:
     [[nodiscard]] bool push(const T &item) noexcept;
     [[nodiscard]] bool pop(T &item) noexcept;
 
-    [[nodiscard]] size_t push(const T *items, size_t size) noexcept;
-    [[nodiscard]] size_t pop(T *items, size_t size) noexcept;
+    [[nodiscard]] size_t push(std::span<const T> items) noexcept;
+    [[nodiscard]] size_t pop(std::span<T> items) noexcept;
 
     [[nodiscard]] T *claim() noexcept;
     [[nodiscard]] bool commit() noexcept;
@@ -127,9 +128,10 @@ bool SpscQueue<T, Capacity>::pop(T &item) noexcept
 }
 
 template<typename T, size_t Capacity>
-size_t SpscQueue<T, Capacity>::push(const T *items, size_t size) noexcept
+size_t SpscQueue<T, Capacity>::push(std::span<const T> items) noexcept
 {
-    if (items == nullptr || size == 0) [[unlikely]]
+    const size_t size = items.size();
+    if (size == 0) [[unlikely]]
     {
         return 0;
     }
@@ -156,12 +158,12 @@ size_t SpscQueue<T, Capacity>::push(const T *items, size_t size) noexcept
 
     const size_t index = position & kMask;
     const size_t chunk1 = std::min(actual, Capacity - index);
-    std::copy_n(items, chunk1, m_buffer + index);
+    std::copy_n(items.data(), chunk1, m_buffer + index);
     
     const size_t chunk2 = actual - chunk1;
     if (chunk2 != 0)
     {
-        std::copy_n(items + chunk1, chunk2, m_buffer);
+        std::copy_n(items.data() + chunk1, chunk2, m_buffer);
     }
 
     m_producer.index.store(position + actual, std::memory_order_release);
@@ -170,9 +172,10 @@ size_t SpscQueue<T, Capacity>::push(const T *items, size_t size) noexcept
 }
 
 template<typename T, size_t Capacity>
-size_t SpscQueue<T, Capacity>::pop(T *items, size_t size) noexcept
+size_t SpscQueue<T, Capacity>::pop(std::span<T> items) noexcept
 {
-    if (items == nullptr || size == 0) [[unlikely]]
+    const size_t size = items.size();
+    if (size == 0) [[unlikely]]
     {
         return 0;
     }
@@ -199,12 +202,12 @@ size_t SpscQueue<T, Capacity>::pop(T *items, size_t size) noexcept
 
     const size_t index = position & kMask;
     const size_t chunk1 = std::min(actual, Capacity - index);
-    std::copy_n(m_buffer + index, chunk1, items);
+    std::copy_n(m_buffer + index, chunk1, items.data());
 
     const size_t chunk2 = actual - chunk1;
     if (chunk2 != 0)
     {
-        std::copy_n(m_buffer, chunk2, items + chunk1);
+        std::copy_n(m_buffer, chunk2, items.data() + chunk1);
     }
 
     m_consumer.index.store(position + actual, std::memory_order_release);

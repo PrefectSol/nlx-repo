@@ -63,7 +63,9 @@ bool okx_parse_code(std::string_view json, int &code) noexcept
 bool okx_parse_time(std::string_view json, int &code, milliseconds &time) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }
@@ -88,7 +90,9 @@ bool okx_parse_time(std::string_view json, int &code, milliseconds &time) noexce
 bool okx_parse_account_config(std::string_view json, int &code, uint64_t &uid, int &mode, bool &hedge, bool &trade) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+    
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }
@@ -99,16 +103,23 @@ bool okx_parse_account_config(std::string_view json, int &code, uint64_t &uid, i
     }
 
     simdjson::dom::element config;
-    std::string_view user;
-    std::string_view level;
-    std::string_view position;
-    std::string_view permissions;
+    bool parsed = data.at(0).get(config) == simdjson::SUCCESS;
+    if (!parsed)
+    {
+        return false;
+    }
 
-    const bool parsed = data.at(0).get(config) == simdjson::SUCCESS &&
-                        config["uid"].get(user) == simdjson::SUCCESS &&
-                        config["acctLv"].get(level) == simdjson::SUCCESS &&
-                        config["posMode"].get(position) == simdjson::SUCCESS &&
-                        config["perm"].get(permissions) == simdjson::SUCCESS;
+    std::string_view user;
+    parsed = parsed && config["uid"].get(user) == simdjson::SUCCESS;
+    
+    std::string_view level;
+    parsed = parsed && config["acctLv"].get(level) == simdjson::SUCCESS;
+    
+    std::string_view position;
+    parsed = parsed && config["posMode"].get(position) == simdjson::SUCCESS;
+
+    std::string_view permissions;
+    parsed = parsed && config["perm"].get(permissions) == simdjson::SUCCESS;
 
     if (!parsed || !to_number(user, uid) || !to_number(level, mode))
     {
@@ -124,7 +135,9 @@ bool okx_parse_account_config(std::string_view json, int &code, uint64_t &uid, i
 bool okx_parse_balance(std::string_view json, int &code, double &available, std::string_view currency) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }
@@ -135,7 +148,9 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
     }
 
     simdjson::dom::array assets;
-    if (data.at(0)["details"].get(assets) != simdjson::SUCCESS)
+
+    bool parsed = data.at(0)["details"].get(assets) == simdjson::SUCCESS;
+    if (!parsed)
     {
         return false;
     }
@@ -144,7 +159,9 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
     for (const simdjson::dom::element asset : assets)
     {
         std::string_view name;
-        if (asset["ccy"].get(name) != simdjson::SUCCESS)
+        parsed = asset["ccy"].get(name) == simdjson::SUCCESS;
+
+        if (!parsed)
         {
             return false;
         }
@@ -155,7 +172,9 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
         }
 
         std::string_view text;
-        return asset["availEq"].get(text) == simdjson::SUCCESS && to_number(text, available);
+        parsed = asset["availEq"].get(text) == simdjson::SUCCESS;
+        
+        return parsed && to_number(text, available);
     }
 
     return true;
@@ -164,7 +183,9 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
 bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }
@@ -178,8 +199,10 @@ bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexce
     for (const simdjson::dom::element position : data)
     {
         std::string_view text;
+        const bool parsed = position["pos"].get(text) == simdjson::SUCCESS;
+
         double size = 0.0;
-        if (position["pos"].get(text) != simdjson::SUCCESS || !to_number(text, size))
+        if (!parsed || !to_number(text, size))
         {
             return false;
         }
@@ -213,11 +236,13 @@ bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept
     return true;
 }
 
-bool okx_parse_linear_swaps(std::string_view json, int &code, std::string_view settle, std::string_view category, milliseconds listed_before,
-                            std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept
+bool okx_parse_instruments(std::string_view json, int &code, std::string_view settle, std::string_view category, std::string_view contract_type,
+                           milliseconds listed_before, std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }
@@ -233,31 +258,38 @@ bool okx_parse_linear_swaps(std::string_view json, int &code, std::string_view s
     for (const simdjson::dom::element instrument : data)
     {
         std::string_view id;
-        std::string_view currency;
-        std::string_view type;
-        std::string_view state;
-        std::string_view rule;
-        std::string_view group;
-        std::string_view expiry;
-        std::string_view listing;
-        std::string_view value;
+        bool parsed = instrument["instId"].get(id) == simdjson::SUCCESS;
 
-        const bool parsed = instrument["instId"].get(id) == simdjson::SUCCESS &&
-                            instrument["settleCcy"].get(currency) == simdjson::SUCCESS &&
-                            instrument["ctType"].get(type) == simdjson::SUCCESS &&
-                            instrument["state"].get(state) == simdjson::SUCCESS &&
-                            instrument["ruleType"].get(rule) == simdjson::SUCCESS &&
-                            instrument["instCategory"].get(group) == simdjson::SUCCESS &&
-                            instrument["expTime"].get(expiry) == simdjson::SUCCESS &&
-                            instrument["listTime"].get(listing) == simdjson::SUCCESS &&
-                            instrument["ctVal"].get(value) == simdjson::SUCCESS;
+        std::string_view currency;
+        parsed = parsed && instrument["settleCcy"].get(currency) == simdjson::SUCCESS;
+
+        std::string_view type;
+        parsed = parsed && instrument["ctType"].get(type) == simdjson::SUCCESS;
+
+        std::string_view state;
+        parsed = parsed && instrument["state"].get(state) == simdjson::SUCCESS;
+        
+        std::string_view rule;
+        parsed = parsed && instrument["ruleType"].get(rule) == simdjson::SUCCESS;
+        
+        std::string_view group;
+        parsed = parsed && instrument["instCategory"].get(group) == simdjson::SUCCESS;
+        
+        std::string_view expiry;
+        parsed = parsed && instrument["expTime"].get(expiry) == simdjson::SUCCESS;
+        
+        std::string_view listing;
+        parsed = parsed && instrument["listTime"].get(listing) == simdjson::SUCCESS;
+        
+        std::string_view value;
+        parsed = parsed && instrument["ctVal"].get(value) == simdjson::SUCCESS;
 
         if (!parsed)
         {
             return false;
         }
 
-        const bool eligible = currency == settle && type == "linear" && state == "live" && rule == "normal" && group == category && expiry.empty();
+        const bool eligible = currency == settle && type == contract_type && state == "live" && rule == "normal" && group == category && expiry.empty();
         if (!eligible)
         {
             continue;
@@ -299,7 +331,9 @@ bool okx_parse_linear_swaps(std::string_view json, int &code, std::string_view s
 bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxCandle> candles, size_t &count) noexcept
 {
     simdjson::dom::array data;
-    if (!parse(json, code, data))
+
+    const bool result = parse(json, code, data);
+    if (!result)
     {
         return false;
     }
@@ -311,26 +345,38 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
 
     count = 0;
 
+    const size_t size = candles.size();
     for (const simdjson::dom::element row : data)
     {
-        if (count == candles.size())
+        if (count == size)
         {
             return false;
         }
 
         simdjson::dom::array fields;
-        std::string_view stamp;
-        std::string_view volume;
-        std::string_view confirm;
+        bool parsed = row.get(fields) == simdjson::SUCCESS;
+        if (!parsed)
+        {
+            return false;
+        }
 
-        const bool parsed = row.get(fields) == simdjson::SUCCESS &&
-                            fields.at(0).get(stamp) == simdjson::SUCCESS &&
-                            fields.at(7).get(volume) == simdjson::SUCCESS &&
-                            fields.at(8).get(confirm) == simdjson::SUCCESS;
+        std::string_view stamp;
+        parsed = parsed && fields.at(0).get(stamp) == simdjson::SUCCESS;
+
+        std::string_view volume;
+        parsed = parsed && fields.at(7).get(volume) == simdjson::SUCCESS;
+
+        std::string_view confirm;
+        parsed = parsed && fields.at(8).get(confirm) == simdjson::SUCCESS;
+        
+        if (!parsed)
+        {
+            return false;
+        }
 
         int64_t timestamp = 0;
         double quote_volume = 0.0;
-        if (!parsed || !to_number(stamp, timestamp) || !to_number(volume, quote_volume))
+        if (!to_number(stamp, timestamp) || !to_number(volume, quote_volume))
         {
             return false;
         }
@@ -339,6 +385,7 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
         candle.time = milliseconds(timestamp);
         candle.quote_volume = quote_volume;
         candle.confirmed = confirm == "1";
+
         ++count;
     }
 

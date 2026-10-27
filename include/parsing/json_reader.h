@@ -23,8 +23,8 @@ namespace detail
 [[nodiscard]] bool okx_parse_balance(std::string_view json, int &code, double &available, std::string_view currency) noexcept;
 [[nodiscard]] bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexcept;
 [[nodiscard]] bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept;
-[[nodiscard]] bool okx_parse_linear_swaps(std::string_view json, int &code, std::string_view settle, std::string_view category, milliseconds listed_before,
-                                          std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept;
+[[nodiscard]] bool okx_parse_instruments(std::string_view json, int &code, std::string_view settle, std::string_view category, std::string_view contract_type,
+                                         milliseconds listed_before, std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept;
 [[nodiscard]] bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxCandle> candles, size_t &count) noexcept;
 
 } // namespace nlx::parsing::detail

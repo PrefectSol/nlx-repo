@@ -1,5 +1,6 @@
 #include "core/cpu.h"
 
+#include <cerrno>
 #include <sched.h>
 
 namespace nlx::cpu
@@ -14,6 +15,7 @@ bool set_affinity(pthread_t thread, std::initializer_list<int> cpus) noexcept
     {
         if (cpu < 0 || cpu >= CPU_SETSIZE) [[unlikely]]
         {
+            errno = EINVAL;
             return false;
         }
 
@@ -21,8 +23,13 @@ bool set_affinity(pthread_t thread, std::initializer_list<int> cpus) noexcept
     }
 
     const int result = ::pthread_setaffinity_np(thread, sizeof(cpuset), &cpuset);
+    if (result != 0) [[unlikely]]
+    {
+        errno = result;
+        return false;
+    }
 
-    return result == 0;
+    return true;
 }
 
 bool set_scheduling(pthread_t thread, int policy, int priority) noexcept
@@ -31,20 +38,31 @@ bool set_scheduling(pthread_t thread, int policy, int priority) noexcept
     param.sched_priority = priority;
 
     const int result = ::pthread_setschedparam(thread, policy, &param);
-    
-    return result == 0;
+    if (result != 0) [[unlikely]]
+    {
+        errno = result;
+        return false;
+    }
+
+    return true;
 }
 
 bool set_name(pthread_t thread, const char *name) noexcept
 {
     if (name == nullptr) [[unlikely]]
     {
+        errno = EINVAL;
         return false;
     }
 
     const int result = ::pthread_setname_np(thread, name);
+    if (result != 0) [[unlikely]]
+    {
+        errno = result;
+        return false;
+    }
 
-    return result == 0;
+    return true;
 }
 
 pthread_t this_native_handle() noexcept

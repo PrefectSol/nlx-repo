@@ -2,7 +2,7 @@
 #include "core/crypto.h"
 #include "core/fatal.h"
 #include "core/string.h"
-#include "core/cpu.h"
+#include "core/time.h"
 
 #include <algorithm>
 #include <bit>
@@ -34,11 +34,6 @@ constexpr size_t lowest(SlotMask mask) noexcept
 constexpr std::string_view method(bool post) noexcept
 {
     return post ? "POST" : "GET";
-}
-
-constexpr double ms(nanoseconds value) noexcept
-{
-    return static_cast<double>(value.count()) / 1000000.0;
 }
 
 } // namespace
@@ -119,12 +114,6 @@ void OkxHttpClient::start() noexcept
     if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
     {
         NLX_FATAL("nlx::exchange::OkxHttpClient::start() called before initialize()");
-    }
-
-    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-okx_http");
-    if (!success) [[unlikely]]
-    {
-        NLX_FATAL("nlx::exchange::OkxHttpClient::start() cpu::set_name failed");
     }
 
     m_log.log("okx http client started");
@@ -289,7 +278,7 @@ milliseconds OkxHttpClient::schedule() noexcept
             m_frozen |= bit(index);
             m_thaw = std::min(m_thaw, now + delay);
 
-            m_log.log("okx http {} throttled for {} ms", route.path, ms(delay));
+            m_log.log("okx http {} throttled for {} ms", route.path, nlx::detail::ms(delay));
             continue;
         }
 
@@ -297,7 +286,7 @@ milliseconds OkxHttpClient::schedule() noexcept
         dispatch(index);
     }
 
-    return m_frozen != 0 ? nlx::detail::to_milliseconds(m_thaw - now) : milliseconds(1000);
+    return m_frozen != 0 ? nlx::detail::ceil_milliseconds(m_thaw - now) : milliseconds(1000);
 }
 
 void OkxHttpClient::dispatch(size_t index) noexcept
@@ -346,13 +335,13 @@ void OkxHttpClient::complete() noexcept
         if (request.code == -1) [[unlikely]]
         {
             m_log.log<logging::LogLevel::Error>("okx http {} failed in {} ms: curl = {}, http = {}, {}",
-                                                route.path, ms(result.elapsed), result.error, result.status, result.message);
+                                                route.path, nlx::detail::ms(result.elapsed), result.error, result.status, result.message);
             m_log.log<logging::LogLevel::Error>("okx http {} stages: sent = {}, resolve = {} ms, connect = {} ms, handshake = {} ms",
-                                                route.path, result.sent, ms(result.resolve), ms(result.connect), ms(result.handshake));
+                                                route.path, result.sent, nlx::detail::ms(result.resolve), nlx::detail::ms(result.connect), nlx::detail::ms(result.handshake));
         }
         else
         {
-            m_log.log("okx http {} {} in {} ms", route.path, request.code, ms(result.elapsed));
+            m_log.log("okx http {} {} in {} ms", route.path, request.code, nlx::detail::ms(result.elapsed));
 
             if (request.truncated) [[unlikely]]
             {

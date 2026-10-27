@@ -17,14 +17,11 @@ cmake --build build -j$(nproc)
 ```
 
 ## usage 
-default configuration from `src/core/config.cpp`
+configuration from `src/core/config.cpp` (`Config::load`), credentials from `.env` (see `.env.example`)
+
+run from the project root: `.env`, `certs/cacert.pem` and `logs` are relative to the working directory
 ```bash
 ./build/bin/supervisor
-```
-
-custom configuration from `default.cfg`
-```bash
-./build/bin/supervisor ./default.cfg
 ```
 
 ## tools

@@ -26,7 +26,6 @@ struct OkxConfig
 struct StrategyConfig
 {
     int instruments_refresh_minutes;
-    int liquidity_window_days;
 };
 
 struct Config
@@ -35,9 +34,7 @@ struct Config
     OkxConfig okx;
     StrategyConfig strategy;
 
-    Config();
-
-    [[nodiscard]] static Config load(const char *path);
+    [[nodiscard]] static Config load();
 };
 
 } // namespace nlx

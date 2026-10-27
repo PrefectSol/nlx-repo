@@ -5,13 +5,14 @@
 #include "core/system_error.h"
 #include "core/cpu.h"
 #include "core/fatal.h"
+#include "core/thread.h"
 #include "logging/logger_registry.h"
 
+#include <sched.h>
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
 #include <unistd.h>
 
-#include <thread>
 #include <csignal>
 #include <stdexcept>
 
@@ -103,13 +104,7 @@ int Supervisor::start()
     }
 
     m_logger.initialize();
-    m_logger_thread = std::thread([this] { m_logger.start(); });
-
-    m_okx_http_client.initialize();
-    m_okx_http_thread = std::thread([this] { m_okx_http_client.start(); });
-
-    m_strategy.initialize();
-    m_strategy_thread = std::thread([this] { m_strategy.start(); });
+    m_logger_thread.start(m_logger, "nlx-logger", kLoggerStackSize, SCHED_OTHER, 0);
 
     m_log.log("supervisor started");
     m_log.log("logger directory = {}", m_config.logger.directory);
@@ -118,8 +113,23 @@ int Supervisor::start()
     m_log.log("okx url = {}", m_config.okx.url);
     m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
     m_log.log("strategy instruments refresh minutes = {}", m_config.strategy.instruments_refresh_minutes);
-    m_log.log("strategy liquidity window days = {}", m_config.strategy.liquidity_window_days);
     m_log.flush();
+
+    try
+    {
+        m_okx_http_client.initialize();
+        m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", kOkxHttpStackSize, SCHED_OTHER, 0);
+
+        m_strategy.initialize();
+        m_strategy_thread.start(m_strategy, "nlx-strategy", kStrategyStackSize, SCHED_OTHER, 0);
+    }
+    catch (const std::exception &exp)
+    {
+        m_log.log<logging::LogLevel::Error>("supervisor start failed: {}", exp.what());
+        m_log.flush();
+
+        throw;
+    }
 
     epoll_event event{};
     while (true)

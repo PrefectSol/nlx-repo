@@ -14,6 +14,8 @@ using microseconds = std::chrono::microseconds;
 using milliseconds = std::chrono::milliseconds;
 using seconds = std::chrono::seconds;
 using minutes = std::chrono::minutes;
+using hours = std::chrono::hours;
+using days = std::chrono::days;
 
 namespace time
 {
@@ -40,7 +42,12 @@ template<size_t N>
 [[nodiscard]] constexpr timespec to_timespec(nanoseconds value) noexcept;
 [[nodiscard]] constexpr itimerspec to_itimerspec(milliseconds interval) noexcept;
 [[nodiscard]] constexpr itimerspec to_itimerspec(milliseconds interval, milliseconds delay) noexcept;
-[[nodiscard]] constexpr milliseconds to_milliseconds(nanoseconds interval) noexcept;
+
+[[nodiscard]] constexpr milliseconds ceil_milliseconds(nanoseconds interval) noexcept;
+[[nodiscard]] constexpr minutes ceil_minutes(milliseconds interval) noexcept;
+[[nodiscard]] constexpr days floor_days(nanoseconds interval) noexcept;
+
+[[nodiscard]] constexpr double ms(nanoseconds value) noexcept;
 
 } // namespace nlx::detail
 } // namespace nlx
@@ -91,9 +98,24 @@ constexpr itimerspec to_itimerspec(milliseconds interval, milliseconds delay) no
     return spec;
 }
 
-constexpr milliseconds to_milliseconds(nanoseconds interval) noexcept
+constexpr milliseconds ceil_milliseconds(nanoseconds interval) noexcept
 {
     return std::chrono::ceil<milliseconds>(interval);
+}
+
+constexpr minutes ceil_minutes(milliseconds interval) noexcept
+{
+    return std::chrono::ceil<minutes>(interval);
+}
+
+constexpr days floor_days(nanoseconds interval) noexcept
+{
+    return std::chrono::floor<days>(interval);
+}
+
+constexpr double ms(nanoseconds value) noexcept
+{
+    return static_cast<double>(value.count()) / 1000000.0;
 }
 
 } // namespace nlx::detail

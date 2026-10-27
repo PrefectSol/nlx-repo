@@ -7,7 +7,6 @@
 #include "core/fatal.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
-#include "core/cpu.h"
 
 #include <linux/limits.h>
 
@@ -137,12 +136,6 @@ void Logger::start() noexcept
     if (!m_initialized.load(std::memory_order_acquire)) [[unlikely]]
     {
         NLX_FATAL("nlx::logging::Logger::start() called before initialize()");
-    }
-
-    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-logger");
-    if (!success) [[unlikely]]
-    {
-        NLX_FATAL("nlx::logging::Logger::start() cpu::set_name failed");
     }
 
     epoll_event event{};

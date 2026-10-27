@@ -1,28 +1,23 @@
 #include "core/config.h"
 #include "core/string.h"
 
-#include <stdexcept>
-
 namespace nlx
 {
 
-Config::Config() :
-    logger(), okx(), strategy()
+Config Config::load()
 {
-    detail::str_assign(logger.directory, "logs");
-    logger.rotation_minutes = 1440;
-    logger.flush_ms = 250;
+    Config config{};
 
-    detail::str_assign(okx.url, "https://openapi.okx.com");
-    okx.simulated = true;
+    detail::str_assign(config.logger.directory, "logs");
+    config.logger.rotation_minutes = 1440;
+    config.logger.flush_ms = 250;
 
-    strategy.instruments_refresh_minutes = 1440;
-    strategy.liquidity_window_days = 14;
-}
+    detail::str_assign(config.okx.url, "https://openapi.okx.com");
+    config.okx.simulated = true;
 
-Config Config::load(const char *path)
-{
-    throw std::logic_error("is not implemented");
+    config.strategy.instruments_refresh_minutes = 1440;
+
+    return config;
 }
 
 } // namespace nlx

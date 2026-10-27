@@ -4,13 +4,14 @@
 #include "core/config.h"
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
+#include "core/thread.h"
 #include "exchange/okx_http_client.h"
 #include "exchange/okx_rate_limiter.h"
 #include "logging/logger.h"
 #include "logging/logger_registry.h"
 #include "service/strategy.h"
 
-#include <thread>
+#include <cstddef>
 
 namespace nlx
 {
@@ -30,6 +31,10 @@ public:
     void request_stop() noexcept;
 
 private:
+    static constexpr size_t kLoggerStackSize = 2 * 1024 * 1024;
+    static constexpr size_t kOkxHttpStackSize = 2 * 1024 * 1024;
+    static constexpr size_t kStrategyStackSize = 8 * 1024 * 1024;
+
     Config m_config;
     Credentials m_credentials;
 
@@ -42,9 +47,9 @@ private:
 
     service::Strategy m_strategy;
 
-    std::thread m_logger_thread;
-    std::thread m_okx_http_thread;
-    std::thread m_strategy_thread;
+    Thread m_logger_thread;
+    Thread m_okx_http_thread;
+    Thread m_strategy_thread;
 
     FileDescriptor m_epoll;
     FileDescriptor m_signals;

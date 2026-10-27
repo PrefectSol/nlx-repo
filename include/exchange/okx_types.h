@@ -15,6 +15,7 @@ struct OkxInstrument
     char id[kIdCapacity];
     double contract_value;
     milliseconds list_time;
+    bool is_liquid;
 };
 
 struct OkxCandle
