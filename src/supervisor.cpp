@@ -3,7 +3,6 @@
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "core/system_error.h"
-#include "core/cpu.h"
 #include "core/fatal.h"
 #include "core/thread.h"
 #include "logging/logger_registry.h"
@@ -97,20 +96,29 @@ Supervisor::~Supervisor()
 
 int Supervisor::start()
 {
-    const bool success = cpu::set_name(cpu::this_native_handle(), "nlx-supervisor");
-    if (!success) [[unlikely]]
+    constexpr size_t logger_stack_size = 2 * 1024 * 1024;
+    constexpr size_t okx_http_stack_size = 4 * 1024 * 1024;
+    constexpr size_t strategy_stack_size = 8 * 1024 * 1024;
+
+    const pthread_t handle = thread::this_native_handle();
+
+    bool configured = thread::set_name(handle, "nlx-supervisor");
+    configured = configured && thread::set_affinity(handle, {});
+    configured = configured && thread::set_scheduling(handle, SCHED_OTHER, 0);
+
+    if (!configured) [[unlikely]]
     {
-        NLX_FATAL("nlx::Supervisor::start() cpu::set_name failed");
+        NLX_FATAL("nlx::Supervisor::start() main thread setup failed");
     }
 
     m_logger.initialize();
-    m_logger_thread.start(m_logger, "nlx-logger", kLoggerStackSize, SCHED_OTHER, 0);
+    m_logger_thread.start(m_logger, "nlx-logger", logger_stack_size, SCHED_OTHER, 0, {});
 
     m_log.log("supervisor started");
     m_log.log("logger directory = {}", m_config.logger.directory);
     m_log.log("logger rotation minutes = {}", m_config.logger.rotation_minutes);
     m_log.log("logger flush ms = {}", m_config.logger.flush_ms);
-    m_log.log("okx url = {}", m_config.okx.url);
+    m_log.log("okx api url = {}", m_config.okx.url);
     m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
     m_log.log("strategy instruments refresh minutes = {}", m_config.strategy.instruments_refresh_minutes);
     m_log.flush();
@@ -118,10 +126,10 @@ int Supervisor::start()
     try
     {
         m_okx_http_client.initialize();
-        m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", kOkxHttpStackSize, SCHED_OTHER, 0);
+        m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", okx_http_stack_size, SCHED_OTHER, 0, {});
 
         m_strategy.initialize();
-        m_strategy_thread.start(m_strategy, "nlx-strategy", kStrategyStackSize, SCHED_OTHER, 0);
+        m_strategy_thread.start(m_strategy, "nlx-strategy", strategy_stack_size, SCHED_OTHER, 0, {});
     }
     catch (const std::exception &exp)
     {
@@ -144,6 +152,7 @@ int Supervisor::start()
         {
             [[maybe_unused]] const uint64_t result = detail::drain(m_stop);
             m_log.log<logging::LogLevel::Warning>("stop requested");
+
             break;
         }
 

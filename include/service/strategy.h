@@ -10,7 +10,6 @@
 #include "logging/logger_registry.h"
 #include "network/http_client.h"
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

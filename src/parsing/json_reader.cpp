@@ -77,7 +77,9 @@ bool okx_parse_time(std::string_view json, int &code, milliseconds &time) noexce
 
     std::string_view text;
     int64_t value = 0;
-    if (data.at(0)["ts"].get(text) != simdjson::SUCCESS || !to_number(text, value))
+
+    const bool parsed = data.at(0)["ts"].get(text) == simdjson::SUCCESS;
+    if (!parsed || !to_number(text, value))
     {
         return false;
     }

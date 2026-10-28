@@ -63,7 +63,6 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/credentials.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crypto.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/cpu.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file_descriptor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/system_error.cpp"
