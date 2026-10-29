@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include <sys/types.h>
@@ -163,6 +164,17 @@ FileDescriptor FileDescriptor::make_signalfd(std::initializer_list<int> signals,
         throw SystemError("signalfd failed");
     }
 
+    return FileDescriptor(fd);
+}
+
+FileDescriptor FileDescriptor::make_memfd(const char *name)
+{
+    const int fd = ::memfd_create(name, MFD_CLOEXEC);
+    if (fd < 0) [[unlikely]]
+    {
+        throw SystemError("memfd_create failed");
+    }
+ 
     return FileDescriptor(fd);
 }
 

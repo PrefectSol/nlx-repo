@@ -27,8 +27,8 @@ class SpscQueue
     static_assert((Capacity & (Capacity - 1)) == 0);
 
 public:
-    SpscQueue() = default;
-    ~SpscQueue() = default;
+    SpscQueue() noexcept = default;
+    ~SpscQueue() noexcept = default;
 
     SpscQueue(const SpscQueue &) = delete;
     SpscQueue &operator=(const SpscQueue &) = delete;
