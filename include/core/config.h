@@ -20,6 +20,7 @@ struct OkxConfig
     static constexpr size_t kCapacity = 128;
 
     char url[kCapacity];
+    char websocket_url[kCapacity];
     bool simulated;
 };
 

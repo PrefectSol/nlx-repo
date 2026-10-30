@@ -14,6 +14,7 @@ Config Config::load()
 
     detail::str_assign(config.okx.url, "https://openapi.okx.com");
     config.okx.simulated = true;
+    detail::str_assign(config.okx.websocket_url, config.okx.simulated ? "wss://wspap.okx.com" : "wss://ws.okx.com");
 
     config.strategy.instruments_refresh_minutes = 1440;
 

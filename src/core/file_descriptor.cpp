@@ -206,6 +206,25 @@ void epoll_add(const FileDescriptor &epoll_fd, const FileDescriptor &fd, uint32_
     }
 }
 
+bool epoll_watch(const FileDescriptor &epoll_fd, int fd, uint32_t events) noexcept
+{
+    epoll_event event{};
+    event.events = events;
+    event.data.fd = fd;
+
+    const int result = ::epoll_ctl(epoll_fd.get(), EPOLL_CTL_ADD, fd, &event);
+    return result == 0;
+}
+
+void epoll_unwatch(const FileDescriptor &epoll_fd, int fd) noexcept
+{
+    const int result = ::epoll_ctl(epoll_fd.get(), EPOLL_CTL_DEL, fd, nullptr);
+    if (result != 0 && errno != ENOENT) [[unlikely]]
+    {
+        NLX_FATAL("nlx::detail::epoll_unwatch() epoll_ctl failed");
+    }
+}
+
 size_t epoll_wait(const FileDescriptor &epoll_fd, std::span<epoll_event> events, int timeout) noexcept
 {
     const int result = ::epoll_wait(epoll_fd.get(), events.data(), static_cast<int>(events.size()), timeout);

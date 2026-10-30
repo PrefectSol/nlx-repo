@@ -44,9 +44,11 @@ Supervisor::Supervisor(const Config &config, const Credentials &credentials) :
     m_log(),
     m_okx_rate_limiter(),
     m_okx_http_client(m_config.okx, m_credentials, m_okx_rate_limiter, m_registry),
-    m_strategy(m_config.strategy, m_okx_http_client, m_registry),
+    m_okx_websocket(m_config.okx, m_credentials, m_okx_rate_limiter, m_registry),
+    m_strategy(m_config.strategy, m_okx_http_client, m_okx_websocket, m_registry),
     m_logger_thread(),
     m_okx_http_thread(),
+    m_okx_websocket_thread(),
     m_strategy_thread(),
     m_epoll(),
     m_signals(),
@@ -81,6 +83,12 @@ Supervisor::~Supervisor()
         m_strategy_thread.join();
     }
 
+    if (m_okx_websocket_thread.joinable())
+    {
+        m_okx_websocket.request_stop();
+        m_okx_websocket_thread.join();
+    }
+
     if (m_okx_http_thread.joinable())
     {
         m_okx_http_client.request_stop();
@@ -98,6 +106,7 @@ int Supervisor::start()
 {
     constexpr size_t logger_stack_size = 2 * 1024 * 1024;
     constexpr size_t okx_http_stack_size = 4 * 1024 * 1024;
+    constexpr size_t okx_websocket_stack_size = 4 * 1024 * 1024;
     constexpr size_t strategy_stack_size = 8 * 1024 * 1024;
 
     const pthread_t handle = thread::this_native_handle();
@@ -119,6 +128,7 @@ int Supervisor::start()
     m_log.log("logger rotation minutes = {}", m_config.logger.rotation_minutes);
     m_log.log("logger flush ms = {}", m_config.logger.flush_ms);
     m_log.log("okx api url = {}", m_config.okx.url);
+    m_log.log("okx websocket url = {}", m_config.okx.websocket_url);
     m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
     m_log.log("strategy instruments refresh minutes = {}", m_config.strategy.instruments_refresh_minutes);
     m_log.flush();
@@ -127,6 +137,9 @@ int Supervisor::start()
     {
         m_okx_http_client.initialize();
         m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", okx_http_stack_size, SCHED_OTHER, 0, {});
+
+        m_okx_websocket.initialize();
+        m_okx_websocket_thread.start(m_okx_websocket, "nlx-okx_ws", okx_websocket_stack_size, SCHED_OTHER, 0, {});
 
         m_strategy.initialize();
         m_strategy_thread.start(m_strategy, "nlx-strategy", strategy_stack_size, SCHED_OTHER, 0, {});

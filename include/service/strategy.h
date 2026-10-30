@@ -5,6 +5,7 @@
 #include "core/file_descriptor.h"
 #include "core/time.h"
 #include "exchange/okx_http_client.h"
+#include "exchange/okx_websocket.h"
 #include "exchange/okx_types.h"
 #include "logging/logger_node.h"
 #include "logging/logger_registry.h"
@@ -22,7 +23,7 @@ namespace nlx::service
 class Strategy
 {
 public:
-    explicit Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, logging::LoggerRegistry &registry);
+    explicit Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, exchange::OkxWebsocket &okx_websocket, logging::LoggerRegistry &registry);
 
     Strategy(const Strategy &) = delete;
     Strategy &operator=(const Strategy &) = delete;
@@ -42,6 +43,7 @@ private:
     StrategyConfig m_config;
     logging::LoggerNode m_log;
     exchange::OkxHttpClient &m_okx_http_client;
+    exchange::OkxWebsocket &m_okx_websocket;
 
     FileDescriptor m_epoll;
     FileDescriptor m_stop;

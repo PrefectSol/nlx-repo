@@ -45,6 +45,7 @@ template<size_t N>
 
 [[nodiscard]] constexpr milliseconds ceil_milliseconds(nanoseconds interval) noexcept;
 [[nodiscard]] constexpr minutes ceil_minutes(milliseconds interval) noexcept;
+[[nodiscard]] constexpr seconds floor_seconds(nanoseconds interval) noexcept;
 [[nodiscard]] constexpr days floor_days(nanoseconds interval) noexcept;
 
 [[nodiscard]] constexpr double ms(nanoseconds value) noexcept;
@@ -106,6 +107,11 @@ constexpr milliseconds ceil_milliseconds(nanoseconds interval) noexcept
 constexpr minutes ceil_minutes(milliseconds interval) noexcept
 {
     return std::chrono::ceil<minutes>(interval);
+}
+
+constexpr seconds floor_seconds(nanoseconds interval) noexcept
+{
+    return std::chrono::floor<seconds>(interval);
 }
 
 constexpr days floor_days(nanoseconds interval) noexcept

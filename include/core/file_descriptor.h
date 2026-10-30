@@ -49,6 +49,8 @@ namespace detail
 {
 
 void epoll_add(const FileDescriptor &epoll_fd, const FileDescriptor &fd, uint32_t events = EPOLLIN);
+[[nodiscard]] bool epoll_watch(const FileDescriptor &epoll_fd, int fd, uint32_t events = EPOLLIN) noexcept;
+void epoll_unwatch(const FileDescriptor &epoll_fd, int fd) noexcept;
 [[nodiscard]] size_t epoll_wait(const FileDescriptor &epoll_fd, std::span<epoll_event> events, int timeout) noexcept;
 
 void notify(const FileDescriptor &fd) noexcept;

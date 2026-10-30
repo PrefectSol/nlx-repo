@@ -70,10 +70,12 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/time.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_http_client.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_rate_limiter.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_websocket.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_node.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_registry.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/network/http_client.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/network/websocket_client.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/env_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/json_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/strategy.cpp"
@@ -104,7 +106,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     ASIO_STANDALONE
     ASIO_NO_DEPRECATED
     CURL_STATICLIB
-    WS_CLIENT_USE_SIMDUTF_UTF8
+    WS_CLIENT_USE_SIMD_UTF8
     WS_CLIENT_USE_ZLIB_NG
 )
 

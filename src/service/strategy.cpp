@@ -4,6 +4,7 @@
 #include "exchange/okx_types.h"
 #include "parsing/json_reader.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <numeric>
@@ -13,10 +14,11 @@
 namespace nlx::service
 {
 
-Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, logging::LoggerRegistry &registry) :
+Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, exchange::OkxWebsocket &okx_websocket, logging::LoggerRegistry &registry) :
     m_config(config),
     m_log(),
     m_okx_http_client(okx_http_client),
+    m_okx_websocket(okx_websocket),
     m_epoll(),
     m_stop(),
     m_update(),
@@ -195,6 +197,8 @@ void Strategy::update() noexcept
 
 bool Strategy::reinstruments() noexcept
 {
+    static_assert(kInstrumentsCapacity <= exchange::OkxWebsocket::kInstrumentsCapacity);
+
     const nanoseconds begin = time::now_monotonic();
 
     m_log.log("okx instruments refresh started");
@@ -309,6 +313,17 @@ bool Strategy::reinstruments() noexcept
     if (valid == 0) [[unlikely]]
     {
         m_log.log<logging::LogLevel::Error>("okx instruments refresh found no valid instruments: listed = {}", listed);
+        m_log.flush();
+
+        return false;
+    }
+
+    const auto illiquid = std::ranges::remove_if(listed_instruments, [](const exchange::OkxInstrument &instrument) { return !instrument.is_liquid; });
+    const std::span<const exchange::OkxInstrument> liquid_instruments(listed_instruments.begin(), illiquid.begin());
+
+    if (!m_okx_websocket.resubscribe(liquid_instruments)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx websocket resubscribe rejected: instruments = {}", liquid_instruments.size());
         m_log.flush();
 
         return false;
