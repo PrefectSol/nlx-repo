@@ -24,7 +24,6 @@ template<typename T, size_t Capacity>
 class RingBuffer
 {
     static_assert(std::is_trivially_copyable_v<T>);
-    static_assert(std::is_nothrow_default_constructible_v<T>);
     static_assert(std::is_nothrow_copy_assignable_v<T>);
     static_assert(Capacity >= 1);
 
@@ -43,6 +42,8 @@ public:
 
     [[nodiscard]] T &claim() noexcept;
     void commit() noexcept;
+
+    [[nodiscard]] T &back() noexcept;
 
     [[nodiscard]] std::span<const T, Capacity> history() const noexcept;
 
@@ -108,8 +109,6 @@ RingBuffer<T, Capacity>::RingBuffer() :
 
     m_data = static_cast<T *>(region);
     m_mask = slots - 1;
-
-    clear();
 }
 
 template<typename T, size_t Capacity>
@@ -127,7 +126,6 @@ RingBuffer<T, Capacity>::~RingBuffer() noexcept
 template<typename T, size_t Capacity>
 void RingBuffer<T, Capacity>::clear() noexcept
 {
-    std::fill_n(m_data, m_mask + 1, T{});
     m_head.store(0, std::memory_order_release);
 }
 
@@ -152,6 +150,13 @@ void RingBuffer<T, Capacity>::commit() noexcept
 {
     const size_t position = m_head.load(std::memory_order_relaxed);
     m_head.store(position + 1, std::memory_order_release);
+}
+
+template<typename T, size_t Capacity>
+T &RingBuffer<T, Capacity>::back() noexcept
+{
+    const size_t position = m_head.load(std::memory_order_relaxed);
+    return m_data[(position - 1) & m_mask];
 }
 
 template<typename T, size_t Capacity>

@@ -1,6 +1,5 @@
 #include "network/websocket_client.h"
 
-#include <algorithm>
 #include <format>
 #include <stdexcept>
 #include <string>
@@ -10,24 +9,8 @@
 namespace nlx::network
 {
 
-namespace detail
-{
-
-WebsocketLogger::WebsocketLogger() noexcept :
-    m_log(nullptr)
-{
-
-}
-
-void WebsocketLogger::attach(logging::LoggerNode &log) noexcept
-{
-    m_log = &log;
-}
-
-} // namespace nlx::network::detail
-
 WebsocketClient::WebsocketClient() noexcept :
-    m_logger(),
+    m_logger(ws_client::LogLevel::N),
     m_context(&m_logger),
     m_buffer(),
     m_client(),
@@ -44,14 +27,12 @@ WebsocketClient::~WebsocketClient() noexcept
     close();
 }
 
-void WebsocketClient::initialize(logging::LoggerNode &log)
+void WebsocketClient::initialize()
 {
     if (m_buffer.has_value())
     {
         return;
     }
-
-    m_logger.attach(log);
 
     const auto context = m_context.init();
     if (!context.has_value())
@@ -180,7 +161,12 @@ void WebsocketClient::close() noexcept
     m_close_code = ws_client::close_code::not_set;
 }
 
-bool WebsocketClient::send(std::string_view text) noexcept
+std::span<char> WebsocketClient::output() noexcept
+{
+    return std::span<char>(m_output, kWriteCapacity);
+}
+
+bool WebsocketClient::send(size_t size) noexcept
 {
     if (!m_client.has_value()) [[unlikely]]
     {
@@ -188,15 +174,13 @@ bool WebsocketClient::send(std::string_view text) noexcept
         return false;
     }
 
-    if (text.size() > kWriteCapacity) [[unlikely]]
+    if (size > kWriteCapacity) [[unlikely]]
     {
         fail("websocket message is too long");
         return false;
     }
 
-    std::copy(text.begin(), text.end(), m_output);
-
-    const ws_client::Message message(ws_client::MessageType::text, std::string_view(m_output, text.size()));
+    const ws_client::Message message(ws_client::MessageType::text, std::string_view(m_output, size));
 
     const auto result = m_client->send_message(message, { .compress = false, .timeout = kWriteTimeout });
     if (!result.has_value()) [[unlikely]]

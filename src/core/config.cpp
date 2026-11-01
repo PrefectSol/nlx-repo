@@ -10,9 +10,9 @@ Config Config::load()
 
     detail::str_assign(config.logger.directory, "logs");
     config.logger.rotation_minutes = 1440;
-    config.logger.flush_ms = 250;
+    config.logger.flush_ms = 100;
 
-    detail::str_assign(config.okx.url, "https://openapi.okx.com");
+    detail::str_assign(config.okx.rest_url, "https://openapi.okx.com");
     config.okx.simulated = true;
     detail::str_assign(config.okx.websocket_url, config.okx.simulated ? "wss://wspap.okx.com" : "wss://ws.okx.com");
 

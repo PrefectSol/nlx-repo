@@ -26,6 +26,7 @@ namespace detail
 [[nodiscard]] bool okx_parse_instruments(std::string_view json, int &code, std::string_view settle, std::string_view category, std::string_view contract_type,
                                          milliseconds listed_before, std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept;
 [[nodiscard]] bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxCandle> candles, size_t &count) noexcept;
+[[nodiscard]] bool okx_parse_event(std::string_view json, std::string_view &event, std::string_view &instrument, int &code, std::string_view &message) noexcept;
 
 } // namespace nlx::parsing::detail
 } // namespace nlx::parsing

@@ -14,11 +14,11 @@
 namespace nlx::service
 {
 
-Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, exchange::OkxWebsocket &okx_websocket, logging::LoggerRegistry &registry) :
+Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, Screener &screener, logging::LoggerRegistry &registry) :
     m_config(config),
     m_log(),
     m_okx_http_client(okx_http_client),
-    m_okx_websocket(okx_websocket),
+    m_screener(screener),
     m_epoll(),
     m_stop(),
     m_update(),
@@ -41,6 +41,7 @@ Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_ht
 
     detail::epoll_add(m_epoll, m_stop);
     detail::epoll_add(m_epoll, m_update);
+    detail::epoll_add(m_epoll, m_screener.signals());
 }
 
 void Strategy::initialize()
@@ -164,6 +165,12 @@ void Strategy::start() noexcept
             update();
         }
 
+        if (event.data.fd == m_screener.signals())
+        {
+            [[maybe_unused]] const uint64_t signals = detail::drain(m_screener.signals());
+            receive_signals();
+        }
+
         if (event.data.fd == m_stop)
         {
             [[maybe_unused]] const uint64_t result = detail::drain(m_stop);
@@ -195,9 +202,31 @@ void Strategy::update() noexcept
     }
 }
 
+void Strategy::receive_signals() noexcept
+{
+    ScreenerSignal signal{};
+    while (m_screener.poll(signal))
+    {
+        const nanoseconds delay = time::now() - (signal.time + minutes(1));
+
+        if (signal.event == ScreenerEvent::Cascade)
+        {
+            m_log.log<logging::LogLevel::Warning>("screener cascade: time = {}, instruments = {}, episodes cancelled = {}, delay = {} ms",
+                                                  signal.time.count(), signal.instruments, m_episodes, detail::ms(delay));
+            m_episodes = 0;
+
+            continue;
+        }
+
+        m_log.log("screener trigger: {} at time = {}, window = {}, delay = {} ms", std::string_view(signal.id), signal.time.count(), signal.instruments, detail::ms(delay));
+    }
+
+    m_log.flush();
+}
+
 bool Strategy::reinstruments() noexcept
 {
-    static_assert(kInstrumentsCapacity <= exchange::OkxWebsocket::kInstrumentsCapacity);
+    static_assert(kInstrumentsCapacity <= Screener::kInstrumentsCapacity);
 
     const nanoseconds begin = time::now_monotonic();
 
@@ -321,12 +350,25 @@ bool Strategy::reinstruments() noexcept
     const auto illiquid = std::ranges::remove_if(listed_instruments, [](const exchange::OkxInstrument &instrument) { return !instrument.is_liquid; });
     const std::span<const exchange::OkxInstrument> liquid_instruments(listed_instruments.begin(), illiquid.begin());
 
-    if (!m_okx_websocket.resubscribe(liquid_instruments)) [[unlikely]]
+    ScreenerRequest subscription{ liquid_instruments, 0, false, m_okx_notify };
+    if (!m_screener.resubscribe(subscription)) [[unlikely]]
     {
-        m_log.log<logging::LogLevel::Error>("okx websocket resubscribe rejected: instruments = {}", liquid_instruments.size());
+        m_log.log<logging::LogLevel::Error>("screener resubscribe rejected: instruments = {}", liquid_instruments.size());
         m_log.flush();
 
         return false;
+    }
+
+    detail::wait(m_okx_notify);
+
+    if (!subscription.connected) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("screener is disconnected, subscriptions are deferred until reconnect");
+    }
+
+    if (subscription.ignored != 0) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("screener instruments ignored = {}", subscription.ignored);
     }
 
     const nanoseconds end = time::now_monotonic();

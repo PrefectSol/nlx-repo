@@ -394,4 +394,38 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
     return true;
 }
 
+bool okx_parse_event(std::string_view json, std::string_view &event, std::string_view &instrument, int &code, std::string_view &message) noexcept
+{
+    simdjson::dom::element root;
+
+    const simdjson::error_code result = parser().parse(json.data(), json.size(), false).get(root);
+    if (result != simdjson::SUCCESS || root["event"].get(event) != simdjson::SUCCESS)
+    {
+        return false;
+    }
+
+    instrument = std::string_view();
+    message = std::string_view();
+    code = 0;
+
+    simdjson::dom::element argument;
+    if (root["arg"].get(argument) == simdjson::SUCCESS && argument["instId"].get(instrument) != simdjson::SUCCESS)
+    {
+        return false;
+    }
+
+    std::string_view text;
+    if (root["code"].get(text) == simdjson::SUCCESS && !to_number(text, code))
+    {
+        return false;
+    }
+
+    if (root["msg"].get(message) != simdjson::SUCCESS)
+    {
+        message = std::string_view();
+    }
+
+    return true;
+}
+
 } // namespace nlx::parsing::detail

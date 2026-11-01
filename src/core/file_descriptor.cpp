@@ -111,12 +111,7 @@ FileDescriptor FileDescriptor::make_eventfd(bool nonblocking)
     return FileDescriptor(fd);
 }
 
-FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, bool nonblocking)
-{
-    return make_timerfd(interval, interval, nonblocking);
-}
-
-FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, milliseconds delay, bool nonblocking)
+FileDescriptor FileDescriptor::make_timerfd(bool nonblocking)
 {
     const int flags = TFD_CLOEXEC | (nonblocking ? TFD_NONBLOCK : 0);
     const int fd = ::timerfd_create(CLOCK_MONOTONIC, flags);
@@ -125,7 +120,17 @@ FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, milliseconds 
         throw SystemError("timerfd_create failed");
     }
 
-    FileDescriptor descriptor(fd);
+    return FileDescriptor(fd);
+}
+
+FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, bool nonblocking)
+{
+    return make_timerfd(interval, interval, nonblocking);
+}
+
+FileDescriptor FileDescriptor::make_timerfd(milliseconds interval, milliseconds delay, bool nonblocking)
+{
+    FileDescriptor descriptor = make_timerfd(nonblocking);
 
     const itimerspec spec = detail::to_itimerspec(interval, delay);
     const int result = ::timerfd_settime(descriptor.get(), 0, &spec, nullptr);
@@ -255,6 +260,17 @@ void notify(const FileDescriptor &fd) noexcept
     if (result != sizeof(value)) [[unlikely]]
     {
         NLX_FATAL("nlx::detail::notify() write failed");
+    }
+}
+
+void arm(const FileDescriptor &timer, milliseconds delay) noexcept
+{
+    const itimerspec spec = to_itimerspec(milliseconds::zero(), delay);
+
+    const int result = ::timerfd_settime(timer.get(), 0, &spec, nullptr);
+    if (result != 0) [[unlikely]]
+    {
+        NLX_FATAL("nlx::detail::arm() timerfd_settime failed");
     }
 }
 

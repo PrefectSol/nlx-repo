@@ -2,7 +2,6 @@
 #define NLX_NETWORK_WEBSOCKET_CLIENT_H
 
 #include "core/time.h"
-#include "logging/logger_node.h"
 
 #include <ws_client/ws_client.hpp>
 #include <ws_client/transport/builtin/DnsResolver.hpp>
@@ -13,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <source_location>
+#include <span>
 #include <string_view>
 
 namespace nlx::network
@@ -27,33 +26,6 @@ enum class WebsocketStatus : uint8_t
     Failed
 };
 
-namespace detail
-{
-
-class WebsocketLogger
-{
-public:
-    WebsocketLogger() noexcept;
-
-    WebsocketLogger(const WebsocketLogger &) = delete;
-    WebsocketLogger &operator=(const WebsocketLogger &) = delete;
-    WebsocketLogger(WebsocketLogger &&) = delete;
-    WebsocketLogger &operator=(WebsocketLogger &&) = delete;
-
-    void attach(logging::LoggerNode &log) noexcept;
-
-    template<ws_client::LogLevel Level, ws_client::LogTopic Topic>
-    [[nodiscard]] bool is_enabled() const noexcept;
-
-    template<ws_client::LogLevel Level, ws_client::LogTopic Topic>
-    void log(std::string_view message, std::source_location location = std::source_location::current()) noexcept;
-
-private:
-    logging::LoggerNode *m_log;
-};
-
-} // namespace nlx::network::detail
-
 class WebsocketClient
 {
 public:
@@ -65,12 +37,14 @@ public:
     WebsocketClient(WebsocketClient &&) = delete;
     WebsocketClient &operator=(WebsocketClient &&) = delete;
 
-    void initialize(logging::LoggerNode &log);
+    void initialize();
 
     [[nodiscard]] bool connect(std::string_view url, milliseconds timeout) noexcept;
     void close() noexcept;
 
-    [[nodiscard]] bool send(std::string_view text) noexcept;
+    [[nodiscard]] std::span<char> output() noexcept;
+    [[nodiscard]] bool send(size_t size) noexcept;
+
     [[nodiscard]] WebsocketStatus read(std::string_view &text, milliseconds timeout) noexcept;
     [[nodiscard]] bool pending() noexcept;
 
@@ -82,7 +56,7 @@ public:
     static constexpr size_t kWriteCapacity = 64 * 1024;
 
 private:
-    using Logger = detail::WebsocketLogger;
+    using Logger = ws_client::ConsoleLogger;
     using Context = ws_client::OpenSslContext<Logger>;
     using Socket = ws_client::OpenSslSocket<Logger>;
     using Client = ws_client::WebSocketClient<Logger, Socket>;
@@ -110,29 +84,4 @@ private:
 };
 
 } // namespace nlx::network
-
-namespace nlx::network::detail
-{
-
-template<ws_client::LogLevel Level, ws_client::LogTopic Topic>
-bool WebsocketLogger::is_enabled() const noexcept
-{
-    return m_log != nullptr && Level == ws_client::LogLevel::E;
-}
-
-template<ws_client::LogLevel Level, ws_client::LogTopic Topic>
-void WebsocketLogger::log(std::string_view message, std::source_location location) noexcept
-{
-    if (!is_enabled<Level, Topic>())
-    {
-        return;
-    }
-
-    const std::string_view topic = ws_client::to_string(Topic);
-    const std::string_view file = ws_client::extract_log_file_name(location.file_name());
-
-    m_log->log<logging::LogLevel::Error>("websocket {} {}:{} {}", topic, file, location.line(), message);
-}
-
-} // namespace nlx::network::detail
 #endif // !NLX_NETWORK_WEBSOCKET_CLIENT_H

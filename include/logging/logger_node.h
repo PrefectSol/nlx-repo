@@ -81,7 +81,7 @@ static_assert(LogRecord::kMaxArgs <= UINT8_MAX);
 
 struct LoggerChannel
 {
-    static constexpr size_t kQueueCapacity = 128;
+    static constexpr size_t kQueueCapacity = 512;
 
     SpscQueue<LogRecord, kQueueCapacity> queue;
     std::atomic<size_t> dropped{0};

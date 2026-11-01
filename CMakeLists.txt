@@ -20,7 +20,6 @@ set(CURL_LIB "${LIB_DIR}/curl/lib/libcurl.a")
 set(SSL_LIB "${LIB_DIR}/openssl/lib64/libssl.a")
 set(CRYPTO_LIB "${LIB_DIR}/openssl/lib64/libcrypto.a")
 set(ZLIBNG_LIB "${LIB_DIR}/zlib-ng/lib/libz-ng.a")
-set(SIMDUTF_LIB "${LIB_DIR}/simdutf/lib/libsimdutf.a")
 set(SIMDJSON_LIB "${LIB_DIR}/simdjson/lib/libsimdjson.a")
 
 add_library(dep_curl STATIC IMPORTED GLOBAL)
@@ -47,12 +46,6 @@ set_target_properties(dep_zlibng PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${LIB_DIR}/zlib-ng/include"
 )
 
-add_library(dep_simdutf STATIC IMPORTED GLOBAL)
-set_target_properties(dep_simdutf PROPERTIES
-    IMPORTED_LOCATION "${SIMDUTF_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${LIB_DIR}/simdutf/include"
-)
-
 add_library(dep_simdjson STATIC IMPORTED GLOBAL)
 set_target_properties(dep_simdjson PROPERTIES
     IMPORTED_LOCATION "${SIMDJSON_LIB}"
@@ -70,7 +63,7 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/time.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_http_client.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_rate_limiter.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_websocket.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_streamer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_node.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_registry.cpp"
@@ -78,6 +71,7 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/network/websocket_client.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/env_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/json_reader.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/service/screener.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/strategy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/supervisor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
@@ -94,20 +88,25 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     "${THIRDPARTY_DIR}/websocketclient-cpp/include"
     "${THIRDPARTY_DIR}/websocketclient-cpp"
-    "${THIRDPARTY_DIR}/asio/asio/include"
     "${LIB_DIR}/openssl/include"
     "${LIB_DIR}/simdjson/include"
     "${LIB_DIR}/curl/include"
     "${LIB_DIR}/zlib-ng/include"
-    "${LIB_DIR}/simdutf/include"
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
-    ASIO_STANDALONE
-    ASIO_NO_DEPRECATED
     CURL_STATICLIB
-    WS_CLIENT_USE_SIMD_UTF8
     WS_CLIENT_USE_ZLIB_NG
+    WS_CLIENT_VALIDATE_UTF8=0
+    WS_CLIENT_LOG_DNS=0
+    WS_CLIENT_LOG_TCP=0
+    WS_CLIENT_LOG_SSL=0
+    WS_CLIENT_LOG_HANDSHAKE=0
+    WS_CLIENT_LOG_COMPRESSION=0
+    WS_CLIENT_LOG_SEND_FRAME=0
+    WS_CLIENT_LOG_SEND_FRAME_PAYLOAD=0
+    WS_CLIENT_LOG_RECV_FRAME=0
+    WS_CLIENT_LOG_RECV_FRAME_PAYLOAD=0
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -134,7 +133,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     dep_ssl
     dep_crypto
     dep_zlibng
-    dep_simdutf
     dep_simdjson
     pthread
     dl

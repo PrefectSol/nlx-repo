@@ -7,9 +7,9 @@
 #include "core/thread.h"
 #include "exchange/okx_http_client.h"
 #include "exchange/okx_rate_limiter.h"
-#include "exchange/okx_websocket.h"
 #include "logging/logger.h"
 #include "logging/logger_registry.h"
+#include "service/screener.h"
 #include "service/strategy.h"
 
 namespace nlx
@@ -39,13 +39,13 @@ private:
 
     exchange::OkxRateLimiter m_okx_rate_limiter;
     exchange::OkxHttpClient m_okx_http_client;
-    exchange::OkxWebsocket m_okx_websocket;
 
+    service::Screener m_screener;
     service::Strategy m_strategy;
 
     thread::Thread m_logger_thread;
     thread::Thread m_okx_http_thread;
-    thread::Thread m_okx_websocket_thread;
+    thread::Thread m_screener_thread;
     thread::Thread m_strategy_thread;
 
     FileDescriptor m_epoll;

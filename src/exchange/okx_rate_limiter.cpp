@@ -48,4 +48,15 @@ void OkxRateLimiter::penalize(OkxRequest request, nanoseconds now) noexcept
     }
 }
 
+void OkxRateLimiter::reset(OkxRequest request) noexcept
+{
+    const std::lock_guard<std::mutex> lock(m_lock);
+
+    const auto begin = m_times.begin() + kOffsets[request];
+    const auto end = m_times.begin() + kOffsets[request + 1];
+
+    std::fill(begin, end, kEmpty);
+    m_cursors[request] = 0;
+}
+
 } // namespace nlx::exchange

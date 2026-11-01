@@ -33,6 +33,7 @@ public:
 
     [[nodiscard]] static FileDescriptor make_epoll();
     [[nodiscard]] static FileDescriptor make_eventfd(bool nonblocking = true);
+    [[nodiscard]] static FileDescriptor make_timerfd(bool nonblocking = true);
     [[nodiscard]] static FileDescriptor make_timerfd(milliseconds interval, bool nonblocking = true);
     [[nodiscard]] static FileDescriptor make_timerfd(milliseconds interval, milliseconds delay, bool nonblocking = true);
     [[nodiscard]] static FileDescriptor make_signalfd(std::initializer_list<int> signals, bool nonblocking = true);
@@ -54,6 +55,7 @@ void epoll_unwatch(const FileDescriptor &epoll_fd, int fd) noexcept;
 [[nodiscard]] size_t epoll_wait(const FileDescriptor &epoll_fd, std::span<epoll_event> events, int timeout) noexcept;
 
 void notify(const FileDescriptor &fd) noexcept;
+void arm(const FileDescriptor &timer, milliseconds delay) noexcept;
 [[nodiscard]] int receive(const FileDescriptor &fd) noexcept;
 [[nodiscard]] uint64_t drain(const FileDescriptor &fd) noexcept;
 

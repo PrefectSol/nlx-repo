@@ -25,5 +25,17 @@ struct OkxCandle
     bool confirmed;
 };
 
+struct alignas(64) OkxBar
+{
+    milliseconds time;
+    double open;
+    double high;
+    double low;
+    double close;
+    double volume;
+    double currency_volume;
+    double quote_volume;
+};
+
 } // namespace nlx::exchange
 #endif // !NLX_EXCHANGE_OKX_TYPES_H

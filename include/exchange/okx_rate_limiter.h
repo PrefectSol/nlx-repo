@@ -24,8 +24,7 @@ enum OkxRequest : size_t
     HttpSetPositionMode,
     HttpSetAccountMode,
     WebsocketConnect,
-    WebsocketPublicSubscribe,
-    WebsocketPrivateSubscribe,
+    WebsocketBusinessSubscribe,
     OkxRequestsSize
 };
 
@@ -58,6 +57,7 @@ public:
 
     [[nodiscard]] nanoseconds acquire(OkxRequest request, nanoseconds now) noexcept;
     void penalize(OkxRequest request, nanoseconds now) noexcept;
+    void reset(OkxRequest request) noexcept;
 
 private:
     struct Rule
@@ -77,7 +77,6 @@ private:
         { 5, seconds(2) },
         { 5, seconds(2) },
         { 3, seconds(1) },
-        { 480, minutes(60) },
         { 480, minutes(60) }
     }};
 

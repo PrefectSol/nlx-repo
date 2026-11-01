@@ -68,10 +68,10 @@ private:
         bool pending{false};
     };
 
+    alignas(kCacheLineSize) T m_buffer[Capacity];
+
     State m_producer;
     State m_consumer;
-
-    alignas(kCacheLineSize) T m_buffer[Capacity];
 };
 
 } // namespace nlx

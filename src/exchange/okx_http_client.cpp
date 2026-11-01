@@ -59,10 +59,10 @@ OkxHttpClient::OkxHttpClient(const OkxConfig &config, const Credentials &credent
 {
     m_log = registry.create_node("okx_http");
 
-    const std::string_view url(config.url, ::strnlen(config.url, sizeof(config.url)));
+    const std::string_view url(config.rest_url, ::strnlen(config.rest_url, sizeof(config.rest_url)));
     if (url.empty() || !string::safe_strcpy(m_url, url)) [[unlikely]]
     {
-        throw std::invalid_argument("okx url is invalid");
+        throw std::invalid_argument("okx rest url is invalid");
     }
 
     const auto key =std::format_to_n(m_key, sizeof(m_key) - 1, "OK-ACCESS-KEY: {}", credentials.api_key);
