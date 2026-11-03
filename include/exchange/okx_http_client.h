@@ -1,7 +1,6 @@
 #ifndef NLX_EXCHANGE_OKX_HTTP_CLIENT_H
 #define NLX_EXCHANGE_OKX_HTTP_CLIENT_H
 
-#include "core/config.h"
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
@@ -23,7 +22,7 @@ namespace nlx::exchange
 class OkxHttpClient
 {
 public:
-    explicit OkxHttpClient(const OkxConfig &config, const Credentials &credentials, OkxRateLimiter &limiter, logging::LoggerRegistry &registry);
+    explicit OkxHttpClient(const Credentials &credentials, OkxRateLimiter &limiter, logging::LoggerRegistry &registry);
 
     OkxHttpClient(const OkxHttpClient &) = delete;
     OkxHttpClient &operator=(const OkxHttpClient &) = delete;
@@ -47,9 +46,11 @@ public:
 private:
     using SlotMask = network::HttpClient::SlotMask;
 
+    static constexpr char kUrl[] = "https://openapi.okx.com";
+    static constexpr bool kSimulated = false;
+
     static constexpr size_t kParametersCapacity = 256;
     static constexpr size_t kHeaderCapacity = 64;
-    static constexpr size_t kUrlCapacity = OkxConfig::kCapacity + kParametersCapacity;
 
     struct Route
     {
@@ -89,7 +90,6 @@ private:
 
     network::HttpClient m_http_client;
 
-    char m_url[OkxConfig::kCapacity];
     char m_key[kHeaderCapacity];
     char m_passphrase[kHeaderCapacity];
     char m_simulated[kHeaderCapacity];

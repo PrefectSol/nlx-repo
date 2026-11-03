@@ -48,8 +48,9 @@ CURLM *make_multi(long connections) noexcept
         return nullptr;
     }
 
-    const bool configured = curl_multi_setopt(multi, CURLMOPT_MAX_TOTAL_CONNECTIONS, connections) == CURLM_OK &&
-                            curl_multi_setopt(multi, CURLMOPT_MAXCONNECTS, connections) == CURLM_OK;
+    bool configured = curl_multi_setopt(multi, CURLMOPT_MAX_TOTAL_CONNECTIONS, connections) == CURLM_OK;
+    configured = configured && curl_multi_setopt(multi, CURLMOPT_MAXCONNECTS, connections) == CURLM_OK;
+
     if (!configured) [[unlikely]]
     {
         curl_multi_cleanup(multi);

@@ -78,8 +78,13 @@ void Thread::create(void (*routine)(void *) noexcept, void *object, const char *
         throw std::logic_error("thread is already started");
     }
 
-    const bool named = name != nullptr && string::safe_strcpy(m_name, std::string_view(name, ::strnlen(name, kNameCapacity)));
-    if (!named) [[unlikely]]
+    if (name == nullptr) [[unlikely]]
+    {
+        throw std::invalid_argument("invalid thread name pointer");
+    }
+
+    const size_t size = ::strnlen(name, kNameCapacity);
+    if (!string::safe_strcpy(m_name, std::string_view(name, size))) [[unlikely]]
     {
         throw std::invalid_argument("invalid thread name");
     }
@@ -143,7 +148,6 @@ void Thread::create(void (*routine)(void *) noexcept, void *object, const char *
 void *Thread::run(void *context) noexcept
 {
     Thread &thread = *static_cast<Thread *>(context);
-
     if (!set_name(this_native_handle(), thread.m_name)) [[unlikely]]
     {
         NLX_FATAL("nlx::thread::Thread::run() set_name failed");

@@ -1,10 +1,10 @@
 #ifndef NLX_SUPERVISOR_H
 #define NLX_SUPERVISOR_H
 
-#include "core/config.h"
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "core/thread.h"
+#include "exchange/okx_candle_streamer.h"
 #include "exchange/okx_http_client.h"
 #include "exchange/okx_rate_limiter.h"
 #include "logging/logger.h"
@@ -18,7 +18,7 @@ namespace nlx
 class Supervisor
 {
 public:
-    explicit Supervisor(const Config &config, const Credentials &credentials);
+    explicit Supervisor(const Credentials &credentials);
     ~Supervisor();
 
     Supervisor(const Supervisor &) = delete;
@@ -30,7 +30,6 @@ public:
     void request_stop() noexcept;
 
 private:
-    Config m_config;
     Credentials m_credentials;
 
     logging::Logger m_logger;
@@ -39,13 +38,14 @@ private:
 
     exchange::OkxRateLimiter m_okx_rate_limiter;
     exchange::OkxHttpClient m_okx_http_client;
+    exchange::OkxCandleStreamer m_okx_candle_streamer;
 
-    service::Screener m_screener;
+    service::Screener<exchange::OkxCandleStreamer> m_okx_screener;
     service::Strategy m_strategy;
 
     thread::Thread m_logger_thread;
     thread::Thread m_okx_http_thread;
-    thread::Thread m_screener_thread;
+    thread::Thread m_okx_screener_thread;
     thread::Thread m_strategy_thread;
 
     FileDescriptor m_epoll;

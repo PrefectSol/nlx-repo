@@ -1,6 +1,5 @@
 #include "logging/logger.h"
 #include "logging/logger_node.h"
-#include "core/config.h"
 #include "core/file.h"
 #include "core/string.h"
 #include "core/system_error.h"
@@ -63,8 +62,7 @@ constexpr bool validate_name(std::string_view name) noexcept
 
 } // namespace
 
-Logger::Logger(const LoggerConfig &config) :
-    m_config(config),
+Logger::Logger() :
     m_initialized(false),
     m_epoll(),
     m_notify(),
@@ -72,13 +70,6 @@ Logger::Logger(const LoggerConfig &config) :
     m_modules(),
     m_registered(0)
 {
-    if (m_config.directory[0] == '\0' ||
-        m_config.rotation_minutes <= 0 || 
-        m_config.flush_ms <= 0)
-    {
-        throw std::invalid_argument("invalid configuration");
-    }
-
     m_epoll = FileDescriptor::make_epoll();
     m_notify = FileDescriptor::make_eventfd(true);
     m_stop = FileDescriptor::make_eventfd(true);
@@ -118,12 +109,12 @@ LoggerNode Logger::create_node(std::string_view name)
 
 void Logger::initialize()
 {
-    if (!file::mkdir_p(m_config.directory))
+    if (!file::mkdir_p(kDirectory))
     {
         throw SystemError("failed to create directory");
     }
     
-    if (!file::writable(m_config.directory))
+    if (!file::writable(kDirectory))
     {
         throw SystemError("directory is not writable");
     }
@@ -141,7 +132,7 @@ void Logger::start() noexcept
     epoll_event event{};
     while (true)
     {
-        const size_t count = nlx::detail::epoll_wait(m_epoll, { &event, 1 }, m_config.flush_ms);
+        const size_t count = nlx::detail::epoll_wait(m_epoll, { &event, 1 }, kFlushMilliseconds);
         if (count != 0)
         {
             if (event.data.fd == m_stop)
@@ -162,6 +153,21 @@ void Logger::start() noexcept
 void Logger::request_stop() noexcept
 {
     nlx::detail::notify(m_stop);
+}
+
+std::string_view Logger::get_directory() const noexcept
+{
+    return kDirectory;
+}
+
+size_t Logger::get_rotation_minutes() const noexcept
+{
+    return kRotationMinutes;
+}
+
+size_t Logger::get_flush_milliseconds() const noexcept
+{
+    return kFlushMilliseconds;
 }
 
 void Logger::drain_modules() noexcept
@@ -206,7 +212,7 @@ size_t Logger::drain_module(Module &module) noexcept
 
 void Logger::write_record(Module &module, const LogRecord &record) noexcept
 {
-    const nanoseconds interval = module.rotation + minutes(m_config.rotation_minutes);
+    const nanoseconds interval = module.rotation + minutes(kRotationMinutes);
     if (record.timestamp >= interval) [[unlikely]]
     {
         rotate(module, record.timestamp);
@@ -312,13 +318,13 @@ void Logger::write_dropped(const Module &module, size_t dropped) noexcept
 
 void Logger::rotate(Module &module, nanoseconds timestamp) noexcept
 {
-    module.rotation = timestamp - timestamp % minutes(m_config.rotation_minutes);
+    module.rotation = timestamp - timestamp % minutes(kRotationMinutes);
 
     char date_buffer[kDateSize]; 
     const std::string_view date = nlx::detail::format_time(date_buffer, kRotationFormat, module.rotation);
     
     char path[PATH_MAX];
-    const auto result = std::format_to_n(path, sizeof(path) - 1, "{}/{}_{}{}", m_config.directory, date, module.name, kFileExtension);
+    const auto result = std::format_to_n(path, sizeof(path) - 1, "{}/{}_{}{}", kDirectory, date, module.name, kFileExtension);
     if (static_cast<size_t>(result.size) >= sizeof(path)) [[unlikely]]
     {
         NLX_FATAL("nlx::logging::Logger::rotate() path is too long");

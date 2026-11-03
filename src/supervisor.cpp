@@ -36,19 +36,19 @@ constexpr std::string_view signo_name(int signo) noexcept
 
 } // namespace
 
-Supervisor::Supervisor(const Config &config, const Credentials &credentials) :
-    m_config(config),
+Supervisor::Supervisor(const Credentials &credentials) :
     m_credentials(credentials),
-    m_logger(m_config.logger),
+    m_logger(),
     m_registry(m_logger),
     m_log(),
     m_okx_rate_limiter(),
-    m_okx_http_client(m_config.okx, m_credentials, m_okx_rate_limiter, m_registry),
-    m_screener(m_config.okx, m_okx_rate_limiter, m_registry),
-    m_strategy(m_config.strategy, m_okx_http_client, m_screener, m_registry),
+    m_okx_http_client(m_credentials, m_okx_rate_limiter, m_registry),
+    m_okx_candle_streamer(m_okx_rate_limiter, m_registry),
+    m_okx_screener(m_okx_candle_streamer, m_registry, "okx_screener"),
+    m_strategy(m_okx_http_client, m_okx_screener, m_registry),
     m_logger_thread(),
     m_okx_http_thread(),
-    m_screener_thread(),
+    m_okx_screener_thread(),
     m_strategy_thread(),
     m_epoll(),
     m_signals(),
@@ -83,10 +83,10 @@ Supervisor::~Supervisor()
         m_strategy_thread.join();
     }
 
-    if (m_screener_thread.joinable())
+    if (m_okx_screener_thread.joinable())
     {
-        m_screener.request_stop();
-        m_screener_thread.join();
+        m_okx_screener.request_stop();
+        m_okx_screener_thread.join();
     }
 
     if (m_okx_http_thread.joinable())
@@ -106,7 +106,7 @@ int Supervisor::start()
 {
     constexpr size_t logger_stack_size = 2 * 1024 * 1024;
     constexpr size_t okx_http_stack_size = 4 * 1024 * 1024;
-    constexpr size_t screener_stack_size = 4 * 1024 * 1024;
+    constexpr size_t okx_screener_stack_size = 4 * 1024 * 1024;
     constexpr size_t strategy_stack_size = 8 * 1024 * 1024;
 
     const pthread_t handle = thread::this_native_handle();
@@ -124,13 +124,9 @@ int Supervisor::start()
     m_logger_thread.start(m_logger, "nlx-logger", logger_stack_size, SCHED_OTHER, 0, {});
 
     m_log.log("supervisor started");
-    m_log.log("logger directory = {}", m_config.logger.directory);
-    m_log.log("logger rotation minutes = {}", m_config.logger.rotation_minutes);
-    m_log.log("logger flush ms = {}", m_config.logger.flush_ms);
-    m_log.log("okx rest url = {}", m_config.okx.rest_url);
-    m_log.log("okx websocket url = {}", m_config.okx.websocket_url);
-    m_log.log("okx demo trading mode = {}", m_config.okx.simulated);
-    m_log.log("strategy instruments refresh minutes = {}", m_config.strategy.instruments_refresh_minutes);
+    m_log.log("logger directory: {}", m_logger.get_directory());
+    m_log.log("logger rotation minutes: {}", m_logger.get_rotation_minutes());
+    m_log.log("logger flush milliseconds: {}", m_logger.get_flush_milliseconds());
     m_log.flush();
 
     try
@@ -138,15 +134,15 @@ int Supervisor::start()
         m_okx_http_client.initialize();
         m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", okx_http_stack_size, SCHED_OTHER, 0, {});
 
-        m_screener.initialize();
-        m_screener_thread.start(m_screener, "nlx-screener", screener_stack_size, SCHED_OTHER, 0, {});
+        m_okx_screener.initialize();
+        m_okx_screener_thread.start(m_okx_screener, "nlx-okx_scr", okx_screener_stack_size, SCHED_OTHER, 0, {});
 
         m_strategy.initialize();
         m_strategy_thread.start(m_strategy, "nlx-strategy", strategy_stack_size, SCHED_OTHER, 0, {});
     }
     catch (const std::exception &exp)
     {
-        m_log.log<logging::LogLevel::Error>("supervisor start failed: {}", exp.what());
+        m_log.log<logging::LogLevel::Error>("supervisor initialize failed: {}", exp.what());
         m_log.flush();
 
         throw;

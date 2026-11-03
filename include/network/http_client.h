@@ -55,6 +55,7 @@ public:
 
     void launch(size_t index, bool post, const char *url, std::string_view body, HttpRequest &request) noexcept;
     void perform() noexcept;
+
     [[nodiscard]] bool read(size_t &index, HttpResult &result) noexcept;
     [[nodiscard]] bool poll(milliseconds timeout, const FileDescriptor &fd) noexcept;
 

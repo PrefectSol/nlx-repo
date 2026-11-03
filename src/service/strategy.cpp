@@ -14,11 +14,10 @@
 namespace nlx::service
 {
 
-Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, Screener &screener, logging::LoggerRegistry &registry) :
-    m_config(config),
+Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::OkxCandleStreamer> &okx_screener, logging::LoggerRegistry &registry) :
     m_log(),
     m_okx_http_client(okx_http_client),
-    m_screener(screener),
+    m_okx_screener(okx_screener),
     m_epoll(),
     m_stop(),
     m_update(),
@@ -27,21 +26,15 @@ Strategy::Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_ht
     m_episodes(0),
     m_last_reinstruments(0)
 {
-    if (m_config.instruments_refresh_minutes <= 0)
-    {
-        throw std::invalid_argument("invalid strategy configuration");
-    }
-
     m_log = registry.create_node("strategy");
 
     m_epoll = FileDescriptor::make_epoll();
     m_stop = FileDescriptor::make_eventfd(true);
-    m_update = FileDescriptor::make_timerfd(kUpdateInterval, milliseconds::zero(), true);
+    m_update = FileDescriptor::make_timerfd(milliseconds(kUpdateMilliseconds), milliseconds::zero(), true);
     m_okx_notify = FileDescriptor::make_eventfd(true);
 
     detail::epoll_add(m_epoll, m_stop);
     detail::epoll_add(m_epoll, m_update);
-    detail::epoll_add(m_epoll, m_screener.signals());
 }
 
 void Strategy::initialize()
@@ -135,7 +128,7 @@ void Strategy::initialize()
         m_log.flush();
     }
 
-    m_last_reinstruments = time::now_monotonic() - minutes(m_config.instruments_refresh_minutes) - detail::ceil_minutes(kUpdateInterval);
+    m_last_reinstruments = time::now_monotonic() - minutes(kInstrumentsRefreshMinutes) - detail::ceil_minutes(milliseconds(kUpdateMilliseconds));
 
     m_initialized.store(true, std::memory_order_release);
 }
@@ -148,6 +141,9 @@ void Strategy::start() noexcept
     }
 
     m_log.log("strategy started");
+    m_log.log("instruments refresh minutes: {}", kInstrumentsRefreshMinutes);
+    m_log.log("instruments liquidity days: {}", kLiquidityDays);
+    m_log.log("instruments liquidity threshold: {}", kLiquidityThreshold);
     m_log.flush();
 
     epoll_event event{};
@@ -163,12 +159,6 @@ void Strategy::start() noexcept
         {
             [[maybe_unused]] const uint64_t ticks = detail::drain(m_update);
             update();
-        }
-
-        if (event.data.fd == m_screener.signals())
-        {
-            [[maybe_unused]] const uint64_t signals = detail::drain(m_screener.signals());
-            receive_signals();
         }
 
         if (event.data.fd == m_stop)
@@ -190,11 +180,11 @@ void Strategy::request_stop() noexcept
 void Strategy::update() noexcept
 {
     const nanoseconds elapsed = time::now_monotonic() - m_last_reinstruments;
-    const nanoseconds remaining = minutes(m_config.instruments_refresh_minutes) - elapsed;
+    const nanoseconds remaining = minutes(kInstrumentsRefreshMinutes) - elapsed;
 
     if (m_episodes == 0 && remaining <= nanoseconds::zero())
     {
-        const bool refreshed = reinstruments();
+        const bool refreshed = okx_reinstruments();
         if (refreshed)
         {
             m_last_reinstruments = time::now_monotonic();
@@ -202,32 +192,8 @@ void Strategy::update() noexcept
     }
 }
 
-void Strategy::receive_signals() noexcept
+bool Strategy::okx_reinstruments() noexcept
 {
-    ScreenerSignal signal{};
-    while (m_screener.poll(signal))
-    {
-        const nanoseconds delay = time::now() - (signal.time + minutes(1));
-
-        if (signal.event == ScreenerEvent::Cascade)
-        {
-            m_log.log<logging::LogLevel::Warning>("screener cascade: time = {}, instruments = {}, episodes cancelled = {}, delay = {} ms",
-                                                  signal.time.count(), signal.instruments, m_episodes, detail::ms(delay));
-            m_episodes = 0;
-
-            continue;
-        }
-
-        m_log.log("screener trigger: {} at time = {}, window = {}, delay = {} ms", std::string_view(signal.id), signal.time.count(), signal.instruments, detail::ms(delay));
-    }
-
-    m_log.flush();
-}
-
-bool Strategy::reinstruments() noexcept
-{
-    static_assert(kInstrumentsCapacity <= Screener::kInstrumentsCapacity);
-
     const nanoseconds begin = time::now_monotonic();
 
     m_log.log("okx instruments refresh started");
@@ -350,10 +316,25 @@ bool Strategy::reinstruments() noexcept
     const auto illiquid = std::ranges::remove_if(listed_instruments, [](const exchange::OkxInstrument &instrument) { return !instrument.is_liquid; });
     const std::span<const exchange::OkxInstrument> liquid_instruments(listed_instruments.begin(), illiquid.begin());
 
-    ScreenerRequest subscription{ liquid_instruments, 0, false, m_okx_notify };
-    if (!m_screener.resubscribe(subscription)) [[unlikely]]
+    const nanoseconds end = time::now_monotonic();
+
+    m_log.log("okx instruments refreshed: listed = {}, valid = {}, liquid = {}, elapsed = {} ms", listed, valid, liquid, detail::ms(end - begin));
+    m_log.flush();
+
+    std::array<std::string_view, kInstrumentsCapacity> ids{};
+
+    const size_t size = liquid_instruments.size();
+    for (size_t index = 0; index < size; ++index)
     {
-        m_log.log<logging::LogLevel::Error>("screener resubscribe rejected: instruments = {}", liquid_instruments.size());
+        ids[index] = std::string_view(liquid_instruments[index].id);
+    }
+
+    ScreenerRequest screener_request{ std::span(ids).first(size), 0, m_okx_notify };
+
+    result = m_okx_screener.resubscribe(screener_request);
+    if (!result) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx instruments resubscribe request failed: instruments = {}", size);
         m_log.flush();
 
         return false;
@@ -361,19 +342,7 @@ bool Strategy::reinstruments() noexcept
 
     detail::wait(m_okx_notify);
 
-    if (!subscription.connected) [[unlikely]]
-    {
-        m_log.log<logging::LogLevel::Warning>("screener is disconnected, subscriptions are deferred until reconnect");
-    }
-
-    if (subscription.ignored != 0) [[unlikely]]
-    {
-        m_log.log<logging::LogLevel::Warning>("screener instruments ignored = {}", subscription.ignored);
-    }
-
-    const nanoseconds end = time::now_monotonic();
-
-    m_log.log("okx instruments refreshed: listed = {}, valid = {}, liquid = {}, elapsed = {} ms", listed, valid, liquid, detail::ms(end - begin));
+    m_log.log("okx instruments resubscribed: instruments = {}, accepted = {}", size, screener_request.accepted);
     m_log.flush();
 
     return true;
@@ -465,7 +434,8 @@ bool Strategy::okx_get_instruments(network::HttpRequest &request, int &code, mil
     return result && request.code == 200 && code == 0;
 }
 
-bool Strategy::okx_get_candles(network::HttpRequest &request, int &code, std::string_view instrument, std::string_view bar, milliseconds before, std::span<exchange::OkxCandle> candles, size_t &count) noexcept
+bool Strategy::okx_get_candles(network::HttpRequest &request, int &code, std::string_view instrument, std::string_view bar,
+                               milliseconds before, std::span<exchange::OkxCandle> candles, size_t &count) noexcept
 {
     code = -1;
     bool result = m_okx_http_client.get_candles(request, instrument, bar, before, static_cast<uint32_t>(candles.size()));

@@ -1,14 +1,14 @@
 #ifndef NLX_SERVICE_STRATEGY_H
 #define NLX_SERVICE_STRATEGY_H
 
-#include "core/config.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
-#include "exchange/okx_http_client.h"
-#include "exchange/okx_types.h"
 #include "logging/logger_node.h"
 #include "logging/logger_registry.h"
 #include "network/http_client.h"
+#include "exchange/okx_candle_streamer.h"
+#include "exchange/okx_http_client.h"
+#include "exchange/okx_types.h"
 #include "service/screener.h"
 
 #include <atomic>
@@ -23,7 +23,7 @@ namespace nlx::service
 class Strategy
 {
 public:
-    explicit Strategy(const StrategyConfig &config, exchange::OkxHttpClient &okx_http_client, Screener &screener, logging::LoggerRegistry &registry);
+    explicit Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::OkxCandleStreamer> &okx_screener, logging::LoggerRegistry &registry);
 
     Strategy(const Strategy &) = delete;
     Strategy &operator=(const Strategy &) = delete;
@@ -35,15 +35,17 @@ public:
     void request_stop() noexcept;
 
 private:
-    static constexpr milliseconds kUpdateInterval = milliseconds(60 * 1000);
-    static constexpr size_t kInstrumentsCapacity = 1024;
+    static constexpr size_t kInstrumentsRefreshMinutes = 1440;
+
     static constexpr size_t kLiquidityDays = 14;
     static constexpr size_t kLiquidityThreshold = 250'000;
+    
+    static constexpr size_t kUpdateMilliseconds = 60000;
+    static constexpr size_t kInstrumentsCapacity = 1024;
 
-    StrategyConfig m_config;
     logging::LoggerNode m_log;
     exchange::OkxHttpClient &m_okx_http_client;
-    Screener &m_screener;
+    Screener<exchange::OkxCandleStreamer> &m_okx_screener;
 
     FileDescriptor m_epoll;
     FileDescriptor m_stop;
@@ -56,8 +58,7 @@ private:
     nanoseconds m_last_reinstruments;
 
     void update() noexcept;
-    void receive_signals() noexcept;
-    bool reinstruments() noexcept;
+    bool okx_reinstruments() noexcept;
 
     bool liquid_filter(std::span<const double, kLiquidityDays> volumes) const noexcept;
 

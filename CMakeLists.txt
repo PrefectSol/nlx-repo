@@ -53,7 +53,6 @@ set_target_properties(dep_simdjson PROPERTIES
 )
 
 set(SV_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/config.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/credentials.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crypto.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file.cpp"
@@ -61,9 +60,9 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/system_error.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/thread.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/time.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_candle_streamer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_http_client.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_rate_limiter.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/okx_streamer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_node.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/logging/logger_registry.cpp"

@@ -1,7 +1,6 @@
 #ifndef NLX_LOGGING_LOGGER_H
 #define NLX_LOGGING_LOGGER_H
 
-#include "core/config.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
 #include "logging/logger_node.h"
@@ -19,7 +18,7 @@ class LoggerRegistry;
 class Logger
 {
 public:
-    explicit Logger(const LoggerConfig &config);
+    explicit Logger();
 
     Logger(const Logger &) = delete;
     Logger &operator=(const Logger &) = delete;
@@ -30,10 +29,18 @@ public:
     void start() noexcept;
     void request_stop() noexcept;
 
+    [[nodiscard]] std::string_view get_directory() const noexcept;
+    [[nodiscard]] size_t get_rotation_minutes() const noexcept;
+    [[nodiscard]] size_t get_flush_milliseconds() const noexcept;
+
 private:
     friend class LoggerRegistry;
 
-    static constexpr size_t kModulesSize = 4;
+    static constexpr char kDirectory[] = "logs/";
+    static constexpr size_t kRotationMinutes = 1440;
+    static constexpr size_t kFlushMilliseconds = 100;
+
+    static constexpr size_t kModulesSize = 8;
     static constexpr size_t kNameSize = 16;
 
     static constexpr char kRotationFormat[] = "{:%Y%m%d-%H%M}";
@@ -52,8 +59,6 @@ private:
         FileDescriptor file;
         nanoseconds rotation{};
     };
-
-    LoggerConfig m_config;
 
     std::atomic<bool> m_initialized;
 

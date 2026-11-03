@@ -6,7 +6,6 @@
 #include "core/system_error.h"
 
 #include <algorithm>
-#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <numeric>
@@ -55,7 +54,7 @@ public:
 private:
     T *m_data;
     size_t m_mask;
-    std::atomic<size_t> m_head;
+    size_t m_head;
 };
 
 } // namespace nlx
@@ -126,58 +125,50 @@ RingBuffer<T, Capacity>::~RingBuffer() noexcept
 template<typename T, size_t Capacity>
 void RingBuffer<T, Capacity>::clear() noexcept
 {
-    m_head.store(0, std::memory_order_release);
+    m_head = 0;
 }
 
 template<typename T, size_t Capacity>
 void RingBuffer<T, Capacity>::push(const T &item) noexcept
 {
-    const size_t position = m_head.load(std::memory_order_relaxed);
-
-    m_data[position & m_mask] = item;
-    m_head.store(position + 1, std::memory_order_release);
+    m_data[m_head & m_mask] = item;
+    ++m_head;
 }
 
 template<typename T, size_t Capacity>
 T &RingBuffer<T, Capacity>::claim() noexcept
 {
-    const size_t position = m_head.load(std::memory_order_relaxed);
-    return m_data[position & m_mask];
+    return m_data[m_head & m_mask];
 }
 
 template<typename T, size_t Capacity>
 void RingBuffer<T, Capacity>::commit() noexcept
 {
-    const size_t position = m_head.load(std::memory_order_relaxed);
-    m_head.store(position + 1, std::memory_order_release);
+    ++m_head;
 }
 
 template<typename T, size_t Capacity>
 T &RingBuffer<T, Capacity>::back() noexcept
 {
-    const size_t position = m_head.load(std::memory_order_relaxed);
-    return m_data[(position - 1) & m_mask];
+    return m_data[(m_head - 1) & m_mask];
 }
 
 template<typename T, size_t Capacity>
 std::span<const T, Capacity> RingBuffer<T, Capacity>::history() const noexcept
 {
-    const size_t position = m_head.load(std::memory_order_acquire);
-    return std::span<const T, Capacity>(m_data + ((position - Capacity) & m_mask), Capacity);
+    return std::span<const T, Capacity>(m_data + ((m_head - Capacity) & m_mask), Capacity);
 }
 
 template<typename T, size_t Capacity>
 bool RingBuffer<T, Capacity>::full() const noexcept
 {
-    const size_t position = m_head.load(std::memory_order_acquire);
-    return position >= Capacity;
+    return m_head >= Capacity;
 }
 
 template<typename T, size_t Capacity>
 size_t RingBuffer<T, Capacity>::size() const noexcept
 {
-    const size_t position = m_head.load(std::memory_order_acquire);
-    return std::min(position, Capacity);
+    return std::min(m_head, Capacity);
 }
 
 template<typename T, size_t Capacity>

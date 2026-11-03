@@ -1,4 +1,3 @@
-#include "core/config.h"
 #include "core/credentials.h"
 #include "supervisor.h"
 
@@ -18,10 +17,9 @@ int main(int argc, const char *argv[])
 
     try
     {
-        const nlx::Config config = nlx::Config::load();
         const nlx::Credentials credentials = nlx::Credentials::load(".env");
 
-        std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(config, credentials);
+        std::unique_ptr<nlx::Supervisor> supervisor = std::make_unique<nlx::Supervisor>(credentials);
         return supervisor->start();
     }
     catch (const std::exception &exp)
