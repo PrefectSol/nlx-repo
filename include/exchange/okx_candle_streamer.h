@@ -6,10 +6,10 @@
 #include "exchange/okx_rate_limiter.h"
 #include "exchange/okx_types.h"
 #include "logging/logger_node.h"
-#include "logging/logger_registry.h"
 #include "network/websocket_client.h"
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -21,87 +21,64 @@ namespace nlx::exchange
 class OkxCandleStreamer
 {
 public:
-    explicit OkxCandleStreamer(OkxRateLimiter &limiter, logging::LoggerRegistry &registry);
+    explicit OkxCandleStreamer(OkxRateLimiter &limiter, logging::LoggerNode &log);
 
     OkxCandleStreamer(const OkxCandleStreamer &) = delete;
     OkxCandleStreamer &operator=(const OkxCandleStreamer &) = delete;
     OkxCandleStreamer(OkxCandleStreamer &&) = delete;
     OkxCandleStreamer &operator=(OkxCandleStreamer &&) = delete;
 
-    void initialize(const FileDescriptor &epoll);
+    void initialize();
 
-    void tick(nanoseconds now) noexcept;
+    [[nodiscard]] bool resubscribe(std::span<const OkxInstrument> instruments) noexcept;
+
     void receive() noexcept;
+    void heartbeat() noexcept;
     void close() noexcept;
 
-    [[nodiscard]] size_t resubscribe(std::span<const std::string_view> instruments) noexcept;
-
-    [[nodiscard]] bool connected() const noexcept;
-    [[nodiscard]] int fd() const noexcept;
-
-    static constexpr size_t kInstrumentsCapacity = 1024;
+    [[nodiscard]] const FileDescriptor &fd() const noexcept;
 
 private:
     static constexpr char kUrl[] = "wss://ws.okx.com/ws/v5/business";
 
-    static constexpr size_t kIdCapacity = OkxInstrument::kIdCapacity;
+    static constexpr size_t kInstrumentsCapacity = 1024;
+    static constexpr size_t kConnectMilliseconds = 5000;
+    static constexpr size_t kResponseMilliseconds = 1000;
+    static constexpr size_t kHeartbeatMilliseconds = 15000;
 
-    static constexpr milliseconds kConnectTimeout{ 5000 };
-    static constexpr milliseconds kReadTimeout{ 5000 };
-
-    static constexpr nanoseconds kPingInterval = seconds(20);
-    static constexpr nanoseconds kPongTimeout = seconds(10);
-    static constexpr nanoseconds kReconnectDelay = seconds(1);
-    static constexpr nanoseconds kReconnectLimit = seconds(60);
-    static constexpr nanoseconds kStableInterval = seconds(60);
-    static constexpr nanoseconds kReportInterval = seconds(60);
-
-    static_assert(kIdCapacity <= UINT8_MAX);
+    static_assert(std::has_single_bit(kInstrumentsCapacity) && kInstrumentsCapacity < UINT16_MAX);
 
     struct Slot
     {
-        char id[kIdCapacity];
-        uint8_t size;
-        bool wanted;
-        bool pending;
+        char id[OkxInstrument::kIdCapacity];
+        bool subscribed;
     };
 
-    logging::LoggerNode m_log;
+    logging::LoggerNode &m_log;
     OkxRateLimiter &m_limiter;
 
-    const FileDescriptor *m_epoll;
+    FileDescriptor m_epoll;
     network::WebsocketClient m_client;
 
     std::array<Slot, kInstrumentsCapacity> m_slots;
+    std::array<uint16_t, kInstrumentsCapacity * 2> m_index;
 
-    nanoseconds m_opened;
+    size_t m_size;
+    size_t m_subscribed;
+
     nanoseconds m_received;
-    nanoseconds m_pinged;
-    nanoseconds m_retry;
-    nanoseconds m_backoff;
-    nanoseconds m_resume;
-    nanoseconds m_reported;
+    bool m_pinged;
 
-    size_t m_messages;
-    size_t m_bytes;
-    size_t m_acks;
-    size_t m_errors;
+    bool subscribe() noexcept;
+    bool connect() noexcept;
+    void acquire(OkxRequest request) noexcept;
 
-    bool connect(nanoseconds now) noexcept;
-    void disconnect() noexcept;
-    void schedule(nanoseconds now) noexcept;
-    void keepalive(nanoseconds now) noexcept;
-
-    void subscribe() noexcept;
-    bool submit(bool subscribing) noexcept;
     bool send(size_t size) noexcept;
+    bool read(std::string_view &text) noexcept;
+    bool dispatch(std::string_view text) noexcept;
 
-    void dispatch(std::string_view text) noexcept;
-    void report(nanoseconds now) noexcept;
-
-    [[nodiscard]] size_t find(std::string_view id) const noexcept;
-    [[nodiscard]] size_t count() const noexcept;
-    [[nodiscard]] static std::string_view name(const Slot &slot) noexcept;
+    size_t find(std::string_view id) const noexcept;
+    void insert(size_t index) noexcept;
 };
 
 } // namespace nlx::exchange

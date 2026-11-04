@@ -70,7 +70,7 @@ private:
                              std::string_view instrument_type, std::string_view contract_type, std::string_view currency, std::string_view category,
                              size_t &count, size_t &ignored) noexcept;
     bool okx_get_candles(network::HttpRequest &request, int &code, std::string_view instrument, std::string_view bar, milliseconds before,
-                         std::span<exchange::OkxCandle> candles, size_t &count) noexcept;
+                         std::span<exchange::OkxVolume> volumes, size_t &count) noexcept;
     bool okx_get_balance(network::HttpRequest &request, int &code, std::string_view currency, double &available) noexcept;
     bool okx_set_hedge_mode(network::HttpRequest &request, int &code) noexcept;
     bool okx_set_futures_mode(network::HttpRequest &request, int &code) noexcept;

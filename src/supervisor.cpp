@@ -7,10 +7,10 @@
 #include "core/thread.h"
 #include "logging/logger_registry.h"
 
+#include <unistd.h>
 #include <sched.h>
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
-#include <unistd.h>
 
 #include <csignal>
 #include <stdexcept>
@@ -43,8 +43,7 @@ Supervisor::Supervisor(const Credentials &credentials) :
     m_log(),
     m_okx_rate_limiter(),
     m_okx_http_client(m_credentials, m_okx_rate_limiter, m_registry),
-    m_okx_candle_streamer(m_okx_rate_limiter, m_registry),
-    m_okx_screener(m_okx_candle_streamer, m_registry, "okx_screener"),
+    m_okx_screener(m_okx_rate_limiter, m_registry),
     m_strategy(m_okx_http_client, m_okx_screener, m_registry),
     m_logger_thread(),
     m_okx_http_thread(),
@@ -135,7 +134,7 @@ int Supervisor::start()
         m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", okx_http_stack_size, SCHED_OTHER, 0, {});
 
         m_okx_screener.initialize();
-        m_okx_screener_thread.start(m_okx_screener, "nlx-okx_scr", okx_screener_stack_size, SCHED_OTHER, 0, {});
+        m_okx_screener_thread.start(m_okx_screener, "nlx-okx_gate", okx_screener_stack_size, SCHED_OTHER, 0, {});
 
         m_strategy.initialize();
         m_strategy_thread.start(m_strategy, "nlx-strategy", strategy_stack_size, SCHED_OTHER, 0, {});

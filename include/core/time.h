@@ -27,6 +27,8 @@ inline constexpr size_t iso8601_ms_size = sizeof("YYYY-MM-DDTHH:MM:SS.mmmZ");
 
 [[nodiscard]] bool synchronized() noexcept;
 
+void sleep(nanoseconds duration) noexcept;
+
 } // namespace nlx::time
 
 namespace detail

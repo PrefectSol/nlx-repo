@@ -27,4 +27,16 @@ void hmac_sha256_base64(char (&output)[hmac_sha256_base64_size], std::string_vie
     EVP_EncodeBlock(reinterpret_cast<unsigned char *>(output), digest, static_cast<int>(size));
 }
 
+uint64_t fnv1a(std::string_view data) noexcept
+{
+    uint64_t hash = 14695981039346656037ULL;
+    for (char ch : data)
+    {
+        hash ^= static_cast<unsigned char>(ch);
+        hash *= 1099511628211ULL;
+    }
+
+    return hash;
+}
+
 } // namespace nlx::crypto

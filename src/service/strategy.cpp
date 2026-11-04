@@ -4,7 +4,6 @@
 #include "exchange/okx_types.h"
 #include "parsing/json_reader.h"
 
-#include <algorithm>
 #include <array>
 #include <format>
 #include <numeric>
@@ -244,10 +243,10 @@ bool Strategy::okx_reinstruments() noexcept
     for (exchange::OkxInstrument &instrument : listed_instruments)
     {
         const std::string_view id(instrument.id);
-        std::array<exchange::OkxCandle, kLiquidityDays + 1> candles{};
+        std::array<exchange::OkxVolume, kLiquidityDays + 1> daily{};
 
         size_t count = 0;
-        result = okx_get_candles(request, code, id, "1Dutc", detail::ceil_milliseconds(now), std::span(candles), count);
+        result = okx_get_candles(request, code, id, "1Dutc", detail::ceil_milliseconds(now), std::span(daily), count);
         if (!result)
         {
             if (request.code != 200 || code <= 0)
@@ -262,14 +261,14 @@ bool Strategy::okx_reinstruments() noexcept
             continue;
         }
 
-        const size_t offset = count != 0 && candles[0].time == today ? 1 : 0;
+        const size_t offset = count != 0 && milliseconds(daily[0].timestamp) == today ? 1 : 0;
         if (count < offset + kLiquidityDays)
         {
             m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: days = {}", id, count - offset);
             continue;
         }
 
-        const std::span<const exchange::OkxCandle, kLiquidityDays> closed(candles.data() + offset, kLiquidityDays);
+        const std::span<const exchange::OkxVolume, kLiquidityDays> closed(daily.data() + offset, kLiquidityDays);
 
         std::array<double, kLiquidityDays> volumes{};
 
@@ -277,11 +276,11 @@ bool Strategy::okx_reinstruments() noexcept
         bool consecutive = true;
         for (size_t index = 0; index < kLiquidityDays; ++index)
         {
-            const exchange::OkxCandle &candle = closed[index];
+            const exchange::OkxVolume &volume = closed[index];
 
-            confirmed = confirmed && candle.confirmed;
-            consecutive = consecutive && candle.time == today - days(index + 1);
-            volumes[index] = candle.quote_volume;
+            confirmed = confirmed && volume.confirmed;
+            consecutive = consecutive && milliseconds(volume.timestamp) == today - days(index + 1);
+            volumes[index] = volume.volume_usdt;
         }
 
         if (!confirmed) [[unlikely]]
@@ -299,7 +298,7 @@ bool Strategy::okx_reinstruments() noexcept
         }
 
         const bool liquid_pass = liquid_filter(volumes);
-        instrument.is_liquid = liquid_pass;
+        instrument.accepted = liquid_pass;
 
         liquid += static_cast<size_t>(liquid_pass);
         ++valid;
@@ -313,36 +312,21 @@ bool Strategy::okx_reinstruments() noexcept
         return false;
     }
 
-    const auto illiquid = std::ranges::remove_if(listed_instruments, [](const exchange::OkxInstrument &instrument) { return !instrument.is_liquid; });
-    const std::span<const exchange::OkxInstrument> liquid_instruments(listed_instruments.begin(), illiquid.begin());
-
     const nanoseconds end = time::now_monotonic();
 
     m_log.log("okx instruments refreshed: listed = {}, valid = {}, liquid = {}, elapsed = {} ms", listed, valid, liquid, detail::ms(end - begin));
     m_log.flush();
 
-    std::array<std::string_view, kInstrumentsCapacity> ids{};
-
-    const size_t size = liquid_instruments.size();
-    for (size_t index = 0; index < size; ++index)
-    {
-        ids[index] = std::string_view(liquid_instruments[index].id);
-    }
-
-    ScreenerRequest screener_request{ std::span(ids).first(size), 0, m_okx_notify };
-
-    result = m_okx_screener.resubscribe(screener_request);
+    result = m_okx_screener.resubscribe(listed_instruments);
     if (!result) [[unlikely]]
     {
-        m_log.log<logging::LogLevel::Error>("okx instruments resubscribe request failed: instruments = {}", size);
+        m_log.log<logging::LogLevel::Error>("okx instruments resubscribe failed: instruments = {}", liquid);
         m_log.flush();
 
         return false;
     }
 
-    detail::wait(m_okx_notify);
-
-    m_log.log("okx instruments resubscribed: instruments = {}, accepted = {}", size, screener_request.accepted);
+    m_log.log("okx instruments resubscribed: instruments = {}", liquid);
     m_log.flush();
 
     return true;
@@ -435,17 +419,17 @@ bool Strategy::okx_get_instruments(network::HttpRequest &request, int &code, mil
 }
 
 bool Strategy::okx_get_candles(network::HttpRequest &request, int &code, std::string_view instrument, std::string_view bar,
-                               milliseconds before, std::span<exchange::OkxCandle> candles, size_t &count) noexcept
+                               milliseconds before, std::span<exchange::OkxVolume> volumes, size_t &count) noexcept
 {
     code = -1;
-    bool result = m_okx_http_client.get_candles(request, instrument, bar, before, static_cast<uint32_t>(candles.size()));
+    bool result = m_okx_http_client.get_candles(request, instrument, bar, before, static_cast<uint32_t>(volumes.size()));
     if (!result)
     {
         return false;
     }
 
     detail::wait(request.notify);
-    result = parsing::detail::okx_parse_candles({ request.buffer, request.size }, code, candles, count);
+    result = parsing::detail::okx_parse_candles({ request.buffer, request.size }, code, volumes, count);
 
     return result && request.code == 200 && code == 0;
 }

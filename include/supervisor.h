@@ -38,7 +38,6 @@ private:
 
     exchange::OkxRateLimiter m_okx_rate_limiter;
     exchange::OkxHttpClient m_okx_http_client;
-    exchange::OkxCandleStreamer m_okx_candle_streamer;
 
     service::Screener<exchange::OkxCandleStreamer> m_okx_screener;
     service::Strategy m_strategy;

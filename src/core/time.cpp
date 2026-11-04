@@ -1,6 +1,9 @@
 #include "core/time.h"
 
 #include <sys/timex.h>
+#include <time.h>
+
+#include <cerrno>
 
 namespace nlx
 {
@@ -43,6 +46,18 @@ bool synchronized() noexcept
     const int result = ::ntp_adjtime(&state);
 
     return result >= 0 && result != TIME_ERROR && (state.status & STA_UNSYNC) == 0;
+}
+
+void sleep(nanoseconds duration) noexcept
+{
+    timespec remaining = detail::to_timespec(duration);
+    int result;
+
+    do
+    {
+        result = ::clock_nanosleep(CLOCK_MONOTONIC, 0, &remaining, &remaining);
+    }
+    while (result == EINTR);
 }
 
 } // namespace nlx::time

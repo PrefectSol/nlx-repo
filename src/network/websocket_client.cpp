@@ -154,7 +154,7 @@ void WebsocketClient::close() noexcept
         return;
     }
 
-    [[maybe_unused]] const auto result = m_client->close(m_close_code, kCloseTimeout);
+    [[maybe_unused]] const auto result = m_client->close(m_close_code, milliseconds(kCloseMilliseconds));
 
     m_client.reset();
     m_fd = -1;
@@ -182,7 +182,7 @@ bool WebsocketClient::send(size_t size) noexcept
 
     const ws_client::Message message(ws_client::MessageType::text, std::string_view(m_output, size));
 
-    const auto result = m_client->send_message(message, { .compress = false, .timeout = kWriteTimeout });
+    const auto result = m_client->send_message(message, { .compress = false, .timeout = milliseconds(kWriteMilliseconds) });
     if (!result.has_value()) [[unlikely]]
     {
         fail(result.error());
@@ -212,7 +212,7 @@ WebsocketStatus WebsocketClient::read(std::string_view &text, milliseconds timeo
 
     if (ws_client::PingFrame *ping = std::get_if<ws_client::PingFrame>(&result))
     {
-        const auto pong = m_client->send_pong_frame(ping->payload_bytes(), kWriteTimeout);
+        const auto pong = m_client->send_pong_frame(ping->payload_bytes(), milliseconds(kWriteMilliseconds));
         if (!pong.has_value()) [[unlikely]]
         {
             fail(pong.error());
@@ -241,16 +241,16 @@ WebsocketStatus WebsocketClient::read(std::string_view &text, milliseconds timeo
     return WebsocketStatus::Failed;
 }
 
-bool WebsocketClient::pending() noexcept
+bool WebsocketClient::pending(milliseconds timeout) noexcept
 {
     if (!m_client.has_value())
     {
         return false;
     }
 
-    ws_client::Timeout<> expired(milliseconds(1), {});
+    ws_client::Timeout<> deadline = timeout > milliseconds::zero() ? ws_client::Timeout<>(timeout) : ws_client::Timeout<>(milliseconds(1), {});
 
-    const auto result = m_client->underlying().wait_readable(expired);
+    const auto result = m_client->underlying().wait_readable(deadline);
     return result.has_value() && *result;
 }
 

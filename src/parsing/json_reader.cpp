@@ -282,9 +282,6 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
         
         std::string_view listing;
         parsed = parsed && instrument["listTime"].get(listing) == simdjson::SUCCESS;
-        
-        std::string_view value;
-        parsed = parsed && instrument["ctVal"].get(value) == simdjson::SUCCESS;
 
         if (!parsed)
         {
@@ -298,8 +295,7 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
         }
 
         int64_t list_time = 0;
-        double contract_value = 0.0;
-        if (!to_number(listing, list_time) || !to_number(value, contract_value))
+        if (!to_number(listing, list_time))
         {
             return false;
         }
@@ -322,15 +318,13 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
             continue;
         }
 
-        target.contract_value = contract_value;
-        target.list_time = milliseconds(list_time);
         ++count;
     }
 
     return true;
 }
 
-bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxCandle> candles, size_t &count) noexcept
+bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxVolume> volumes, size_t &count) noexcept
 {
     simdjson::dom::array data;
 
@@ -347,7 +341,7 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
 
     count = 0;
 
-    const size_t size = candles.size();
+    const size_t size = volumes.size();
     for (const simdjson::dom::element row : data)
     {
         if (count == size)
@@ -377,16 +371,16 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
         }
 
         int64_t timestamp = 0;
-        double quote_volume = 0.0;
-        if (!to_number(stamp, timestamp) || !to_number(volume, quote_volume))
+        double volume_usdt = 0.0;
+        if (!to_number(stamp, timestamp) || !to_number(volume, volume_usdt))
         {
             return false;
         }
 
-        exchange::OkxCandle &candle = candles[count];
-        candle.time = milliseconds(timestamp);
-        candle.quote_volume = quote_volume;
-        candle.confirmed = confirm == "1";
+        exchange::OkxVolume &target = volumes[count];
+        target.timestamp = timestamp;
+        target.volume_usdt = volume_usdt;
+        target.confirmed = confirm == "1";
 
         ++count;
     }
