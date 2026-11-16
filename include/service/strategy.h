@@ -11,6 +11,7 @@
 #include "exchange/okx_types.h"
 #include "service/screener.h"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +44,9 @@ private:
     static constexpr size_t kUpdateMilliseconds = 60000;
     static constexpr size_t kInstrumentsCapacity = 1024;
 
+    static constexpr size_t kSignalMinutes = 5;
+    static constexpr size_t kSignalThreshold = 5;
+
     logging::LoggerNode m_log;
     exchange::OkxHttpClient &m_okx_http_client;
     Screener<exchange::OkxCandleStreamer> &m_okx_screener;
@@ -57,7 +61,11 @@ private:
     size_t m_episodes;
     nanoseconds m_last_reinstruments;
 
+    std::array<int64_t, kSignalThreshold + 1> m_signals;
+    size_t m_signals_head;
+
     void update() noexcept;
+    void okx_signals() noexcept;
     bool okx_reinstruments() noexcept;
 
     bool liquid_filter(std::span<const double, kLiquidityDays> volumes) const noexcept;

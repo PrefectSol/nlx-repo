@@ -4,6 +4,7 @@
 #include "exchange/okx_types.h"
 #include "parsing/json_reader.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <numeric>
@@ -23,7 +24,9 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_okx_notify(),
     m_initialized(false),
     m_episodes(0),
-    m_last_reinstruments(0)
+    m_last_reinstruments(0),
+    m_signals(),
+    m_signals_head(0)
 {
     m_log = registry.create_node("strategy");
 
@@ -34,6 +37,7 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
 
     detail::epoll_add(m_epoll, m_stop);
     detail::epoll_add(m_epoll, m_update);
+    detail::epoll_add(m_epoll, m_okx_screener.signals());
 }
 
 void Strategy::initialize()
@@ -143,6 +147,7 @@ void Strategy::start() noexcept
     m_log.log("instruments refresh minutes: {}", kInstrumentsRefreshMinutes);
     m_log.log("instruments liquidity days: {}", kLiquidityDays);
     m_log.log("instruments liquidity threshold: {}", kLiquidityThreshold);
+    m_log.log("signals cooldown: threshold = {}, minutes = {}", kSignalThreshold, kSignalMinutes);
     m_log.flush();
 
     epoll_event event{};
@@ -152,6 +157,12 @@ void Strategy::start() noexcept
         if (count == 0)
         {
             continue;
+        }
+
+        if (event.data.fd == m_okx_screener.signals())
+        {
+            [[maybe_unused]] const uint64_t result = detail::drain(m_okx_screener.signals());
+            okx_signals();
         }
 
         if (event.data.fd == m_update)
@@ -188,7 +199,50 @@ void Strategy::update() noexcept
         {
             m_last_reinstruments = time::now_monotonic();
         }
+
+        const size_t discarded = m_okx_screener.discard();
+        if (discarded != 0)
+        {
+            m_log.log<logging::LogLevel::Warning>("okx signals discarded during instruments refresh: {}", discarded);
+            m_log.flush();
+        }
     }
+}
+
+void Strategy::okx_signals() noexcept
+{
+    constexpr int64_t window = static_cast<int64_t>(kSignalMinutes) * 60000;
+
+    ScreenerSignal signal{};
+    while (m_okx_screener.pop(signal))
+    {
+        const std::string_view instrument(signal.instrument);
+
+        m_signals[m_signals_head % m_signals.size()] = signal.timestamp;
+        ++m_signals_head;
+
+        const size_t stored = std::min(m_signals_head, m_signals.size());
+        const int64_t since = signal.timestamp - window;
+
+        size_t count = 0;
+        for (size_t index = 0; index < stored; ++index)
+        {
+            count += static_cast<size_t>(m_signals[index] > since);
+        }
+
+        m_log.log("okx signal: instrument = {}, timestamp = {}, impulse = {}, baseline = {}, signals = {}",
+                  instrument, signal.timestamp, signal.impulse, signal.baseline, count);
+
+        if (count > kSignalThreshold)
+        {
+            m_okx_screener.cooldown();
+            m_signals_head = 0;
+
+            m_log.log<logging::LogLevel::Warning>("okx cooldown requested: signals = {}, minutes = {}", count, kSignalMinutes);
+        }
+    }
+
+    m_log.flush();
 }
 
 bool Strategy::okx_reinstruments() noexcept

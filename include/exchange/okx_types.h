@@ -15,6 +15,16 @@ struct OkxInstrument
     bool accepted;
 };
 
+struct OkxCandle
+{
+    int64_t timestamp;
+    double open;
+    double high;
+    double low;
+    double close;
+    double volume_usdt;
+};
+
 struct OkxVolume
 {
     int64_t timestamp;

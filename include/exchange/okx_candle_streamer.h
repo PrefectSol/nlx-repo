@@ -32,11 +32,17 @@ public:
 
     [[nodiscard]] bool resubscribe(std::span<const OkxInstrument> instruments) noexcept;
 
-    void receive() noexcept;
+    [[nodiscard]] bool poll(size_t &index) noexcept;
+    [[nodiscard]] bool extract(OkxCandle &candle) noexcept;
+
     void heartbeat() noexcept;
     void close() noexcept;
 
     [[nodiscard]] const FileDescriptor &fd() const noexcept;
+    [[nodiscard]] std::string_view instrument(size_t index) const noexcept;
+    [[nodiscard]] size_t size() const noexcept;
+
+    [[nodiscard]] static constexpr size_t capacity() noexcept;
 
 private:
     static constexpr char kUrl[] = "wss://ws.okx.com/ws/v5/business";
@@ -44,7 +50,12 @@ private:
     static constexpr size_t kInstrumentsCapacity = 1024;
     static constexpr size_t kConnectMilliseconds = 5000;
     static constexpr size_t kResponseMilliseconds = 1000;
+    static constexpr size_t kReadMilliseconds = 1000;
     static constexpr size_t kHeartbeatMilliseconds = 15000;
+    static constexpr size_t kBackoffMilliseconds = 1000;
+    static constexpr size_t kBackoffLimitMilliseconds = 30000;
+
+    static constexpr int kUpgradeNotice = 64008;
 
     static_assert(std::has_single_bit(kInstrumentsCapacity) && kInstrumentsCapacity < UINT16_MAX);
 
@@ -67,8 +78,16 @@ private:
     size_t m_subscribed;
 
     nanoseconds m_received;
+    nanoseconds m_pinged_at;
     bool m_pinged;
 
+    nanoseconds m_retry_at;
+    milliseconds m_backoff;
+    bool m_upgrade;
+
+    std::string_view m_body;
+
+    bool reconnect() noexcept;
     bool subscribe() noexcept;
     bool connect() noexcept;
     void acquire(OkxRequest request) noexcept;
@@ -80,6 +99,11 @@ private:
     size_t find(std::string_view id) const noexcept;
     void insert(size_t index) noexcept;
 };
+
+constexpr size_t OkxCandleStreamer::capacity() noexcept
+{
+    return kInstrumentsCapacity;
+}
 
 } // namespace nlx::exchange
 #endif // !NLX_EXCHANGE_OKX_CANDLE_STREAMER_H

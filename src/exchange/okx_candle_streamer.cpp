@@ -2,8 +2,11 @@
 #include "core/crypto.h"
 #include "core/string.h"
 #include "core/time.h"
+#include "logging/logger_node.h"
 #include "parsing/json_reader.h"
 
+#include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace nlx::exchange
@@ -19,7 +22,12 @@ OkxCandleStreamer::OkxCandleStreamer(OkxRateLimiter &limiter, logging::LoggerNod
     m_size(0),
     m_subscribed(0),
     m_received(0),
-    m_pinged(false)
+    m_pinged_at(0),
+    m_pinged(false),
+    m_retry_at(0),
+    m_backoff(kBackoffMilliseconds),
+    m_upgrade(false),
+    m_body()
 {
     m_epoll = FileDescriptor::make_epoll();
 }
@@ -43,7 +51,14 @@ bool OkxCandleStreamer::resubscribe(std::span<const OkxInstrument> instruments) 
 
         if (m_size == kInstrumentsCapacity) [[unlikely]]
         {
+            m_log.log<logging::LogLevel::Warning>("okx candle streamer instruments truncated: capacity = {}", kInstrumentsCapacity);
             break;
+        }
+
+        if (find(instrument.id) != m_size) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Warning>("okx candle streamer instrument duplicated: {}", std::string_view(instrument.id));
+            continue;
         }
 
         nlx::detail::str_assign(m_slots[m_size].id, instrument.id);
@@ -52,22 +67,64 @@ bool OkxCandleStreamer::resubscribe(std::span<const OkxInstrument> instruments) 
         ++m_size;
     }
 
+    m_backoff = milliseconds(kBackoffMilliseconds);
+    m_retry_at = nanoseconds::zero();
+
     return subscribe();
 }
 
-void OkxCandleStreamer::receive() noexcept
+bool OkxCandleStreamer::poll(size_t &index) noexcept
 {
-    do
+    while (m_client.pending(milliseconds::zero()))
     {
         std::string_view text;
         if (!read(text)) [[unlikely]]
         {
-            return;
+            return false;
+        }
+
+        std::string_view id;
+
+        const parsing::OkxCandleStatus status = parsing::detail::okx_parse_candle_head(text, id, m_body);
+        if (status == parsing::OkxCandleStatus::Updated) [[likely]]
+        {
+            continue;
+        }
+
+        if (status == parsing::OkxCandleStatus::Confirmed)
+        {
+            index = find(id);
+            if (index != m_size) [[likely]]
+            {
+                return true;
+            }
+
+            m_log.log<logging::LogLevel::Warning>("okx candle streamer candle for unknown instrument: {}", id);
+            continue;
+        }
+
+        if (status == parsing::OkxCandleStatus::Rejected) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Error>("okx candle streamer candle rejected: {}", text);
+            continue;
         }
 
         [[maybe_unused]] const bool response = dispatch(text);
     }
-    while (m_client.pending(milliseconds::zero()));
+
+    return false;
+}
+
+bool OkxCandleStreamer::extract(OkxCandle &candle) noexcept
+{
+    if (parsing::detail::okx_parse_candle_body(m_body, candle)) [[likely]]
+    {
+        return true;
+    }
+
+    m_log.log<logging::LogLevel::Error>("okx candle streamer candle parse failed: {}", m_body);
+
+    return false;
 }
 
 void OkxCandleStreamer::heartbeat() noexcept
@@ -79,7 +136,19 @@ void OkxCandleStreamer::heartbeat() noexcept
 
     if (!m_client.connected())
     {
-        [[maybe_unused]] const bool subscribed = subscribe();
+        if (time::now_monotonic() >= m_retry_at)
+        {
+            [[maybe_unused]] const bool subscribed = reconnect();
+        }
+
+        return;
+    }
+
+    if (m_upgrade) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx candle streamer reconnecting before service upgrade");
+
+        [[maybe_unused]] const bool subscribed = reconnect();
         return;
     }
 
@@ -90,16 +159,20 @@ void OkxCandleStreamer::heartbeat() noexcept
     {
         m_log.log<logging::LogLevel::Warning>("okx candle streamer heartbeat lost: idle = {} ms", nlx::detail::ms(idle));
 
-        [[maybe_unused]] const bool subscribed = subscribe();
+        [[maybe_unused]] const bool subscribed = reconnect();
         return;
     }
 
     if (idle >= interval && !m_pinged)
     {
         const std::span<char> output = m_client.output();
-        const auto ping = std::format_to_n(output.data(), output.size(), "ping");
+        const auto ping = std::format_to_n(output.data(), static_cast<uint32_t>(output.size()), "ping");
 
-        m_pinged = send(static_cast<size_t>(ping.size));
+        if (send(static_cast<size_t>(ping.size)))
+        {
+            m_pinged_at = time::now_monotonic();
+            m_pinged = true;
+        }
     }
 }
 
@@ -111,6 +184,33 @@ void OkxCandleStreamer::close() noexcept
 const FileDescriptor &OkxCandleStreamer::fd() const noexcept
 {
     return m_epoll;
+}
+
+std::string_view OkxCandleStreamer::instrument(size_t index) const noexcept
+{
+    return std::string_view(m_slots[index].id);
+}
+
+size_t OkxCandleStreamer::size() const noexcept
+{
+    return m_size;
+}
+
+bool OkxCandleStreamer::reconnect() noexcept
+{
+    if (subscribe())
+    {
+        m_backoff = milliseconds(kBackoffMilliseconds);
+        return true;
+    }
+
+    m_retry_at = time::now_monotonic() + m_backoff;
+
+    m_log.log<logging::LogLevel::Warning>("okx candle streamer reconnect failed: retry in {} ms", m_backoff.count());
+
+    m_backoff = std::min(m_backoff * 2, milliseconds(kBackoffLimitMilliseconds));
+
+    return false;
 }
 
 bool OkxCandleStreamer::subscribe() noexcept
@@ -185,6 +285,12 @@ bool OkxCandleStreamer::subscribe() noexcept
             return false;
         }
 
+        std::string_view id;
+        if (parsing::detail::okx_parse_candle_head(text, id, m_body) != parsing::OkxCandleStatus::Unknown)
+        {
+            continue;
+        }
+
         if (dispatch(text))
         {
             ++responses;
@@ -196,6 +302,17 @@ bool OkxCandleStreamer::subscribe() noexcept
 
     m_log.log("okx candle streamer subscribed: instruments = {}, subscribed = {}, elapsed = {} ms",
               m_size, m_subscribed, nlx::detail::ms(end - begin));
+
+    if (m_subscribed != m_size) [[unlikely]]
+    {
+        for (size_t index = 0; index < m_size; ++index)
+        {
+            if (!m_slots[index].subscribed)
+            {
+                m_log.log<logging::LogLevel::Warning>("okx candle streamer subscription missing: {}", std::string_view(m_slots[index].id));
+            }
+        }
+    }
 
     return m_subscribed != 0;
 }
@@ -221,6 +338,7 @@ bool OkxCandleStreamer::connect() noexcept
 
     m_received = time::now_monotonic();
     m_pinged = false;
+    m_upgrade = false;
 
     m_log.log("okx candle streamer connected in {} ms", nlx::detail::ms(m_received - begin));
 
@@ -254,7 +372,7 @@ bool OkxCandleStreamer::send(size_t size) noexcept
 
 bool OkxCandleStreamer::read(std::string_view &text) noexcept
 {
-    const network::WebsocketStatus status = m_client.read(text, milliseconds(kResponseMilliseconds));
+    const network::WebsocketStatus status = m_client.read(text, milliseconds(kReadMilliseconds));
 
     if (status == network::WebsocketStatus::Closed) [[unlikely]]
     {
@@ -280,8 +398,24 @@ bool OkxCandleStreamer::read(std::string_view &text) noexcept
 
 bool OkxCandleStreamer::dispatch(std::string_view text) noexcept
 {
+    if (text == "pong")
+    {
+        m_pinged = false;
+        m_received = time::now_monotonic();
+
+        const double rtt = nlx::detail::ms(m_received - m_pinged_at);
+        m_log.log<logging::LogLevel::Debug>("okx candle streamer pong received: rtt = {}", rtt);
+
+        return true;
+    }
+
     if (!text.starts_with(R"({"event":)")) [[likely]]
     {
+        if (!text.empty()) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Warning>("okx candle streamer unexpected message: {}", text);
+        }
+
         return false;
     }
 
@@ -312,6 +446,14 @@ bool OkxCandleStreamer::dispatch(std::string_view text) noexcept
     {
         m_log.log<logging::LogLevel::Error>("okx candle streamer error: code = {}, message = {}", code, message);
         return true;
+    }
+
+    if (event == "notice")
+    {
+        m_log.log<logging::LogLevel::Warning>("okx candle streamer notice: code = {}, message = {}", code, message);
+        m_upgrade = m_upgrade || code == kUpgradeNotice;
+
+        return false;
     }
 
     m_log.log<logging::LogLevel::Warning>("okx candle streamer event: {}", text);

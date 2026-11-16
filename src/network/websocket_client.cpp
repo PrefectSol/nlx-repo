@@ -251,7 +251,7 @@ bool WebsocketClient::pending(milliseconds timeout) noexcept
     ws_client::Timeout<> deadline = timeout > milliseconds::zero() ? ws_client::Timeout<>(timeout) : ws_client::Timeout<>(milliseconds(1), {});
 
     const auto result = m_client->underlying().wait_readable(deadline);
-    return result.has_value() && *result;
+    return !result.has_value() || *result;
 }
 
 bool WebsocketClient::connected() const noexcept

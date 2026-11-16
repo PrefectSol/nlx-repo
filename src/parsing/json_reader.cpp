@@ -4,6 +4,7 @@
 #include <simdjson.h>
 
 #include <charconv>
+#include <cstring>
 
 namespace nlx::parsing::detail
 {
@@ -20,6 +21,38 @@ bool to_number(std::string_view text, T &value) noexcept
     const auto result = std::from_chars(text.data(), end, value);
 
     return result.ec == std::errc() && result.ptr == end;
+}
+
+constexpr std::string_view okx_candle_head = R"({"arg":{"channel":"candle1m","instId":")";
+constexpr std::string_view okx_candle_body = R"("},"data":[[")";
+constexpr std::string_view okx_candle_next = R"(",")";
+constexpr std::string_view okx_candle_rows = R"(],[)";
+constexpr std::string_view okx_candle_updated = R"(","0"]]})";
+constexpr std::string_view okx_candle_confirmed = R"(","1"]]})";
+
+bool next_field(const char *&cursor, const char *end, const char *position) noexcept
+{
+    const size_t size = okx_candle_next.size();
+    if (static_cast<size_t>(end - position) < size || std::memcmp(position, okx_candle_next.data(), size) != 0) [[unlikely]]
+    {
+        return false;
+    }
+
+    cursor = position + size;
+    return true;
+}
+
+template<typename T>
+bool read_field(const char *&cursor, const char *end, T &value) noexcept
+{
+    const std::from_chars_result result = std::from_chars(cursor, end, value);
+    return result.ec == std::errc() && next_field(cursor, end, result.ptr);
+}
+
+bool skip_field(const char *&cursor, const char *end) noexcept
+{
+    const void *const quote = std::memchr(cursor, '"', static_cast<size_t>(end - cursor));
+    return quote != nullptr && next_field(cursor, end, static_cast<const char *>(quote));
 }
 
 simdjson::dom::parser &parser() noexcept
@@ -420,6 +453,55 @@ bool okx_parse_event(std::string_view json, std::string_view &event, std::string
     }
 
     return true;
+}
+
+OkxCandleStatus okx_parse_candle_head(std::string_view json, std::string_view &instrument, std::string_view &body) noexcept
+{
+    if (!json.starts_with(okx_candle_head)) [[unlikely]]
+    {
+        return OkxCandleStatus::Unknown;
+    }
+
+    const size_t begin = okx_candle_head.size();
+
+    if (json.ends_with(okx_candle_updated)) [[likely]]
+    {
+        const bool single = json.find(okx_candle_rows, begin) == std::string_view::npos;
+        return single ? OkxCandleStatus::Updated : OkxCandleStatus::Rejected;
+    }
+
+    if (!json.ends_with(okx_candle_confirmed)) [[unlikely]]
+    {
+        return OkxCandleStatus::Rejected;
+    }
+
+    const size_t quote = json.find('"', begin);
+    if (quote == begin || quote == std::string_view::npos || !json.substr(quote).starts_with(okx_candle_body)) [[unlikely]]
+    {
+        return OkxCandleStatus::Rejected;
+    }
+
+    instrument = json.substr(begin, quote - begin);
+    body = json.substr(quote + okx_candle_body.size());
+
+    return OkxCandleStatus::Confirmed;
+}
+
+bool okx_parse_candle_body(std::string_view body, exchange::OkxCandle &candle) noexcept
+{
+    const char *cursor = body.data();
+    const char *const end = cursor + body.size();
+
+    bool parsed = read_field(cursor, end, candle.timestamp);
+    parsed = parsed && read_field(cursor, end, candle.open);
+    parsed = parsed && read_field(cursor, end, candle.high);
+    parsed = parsed && read_field(cursor, end, candle.low);
+    parsed = parsed && read_field(cursor, end, candle.close);
+    parsed = parsed && skip_field(cursor, end);
+    parsed = parsed && skip_field(cursor, end);
+    parsed = parsed && read_field(cursor, end, candle.volume_usdt);
+
+    return parsed && static_cast<size_t>(end - cursor) == okx_candle_confirmed.size() - okx_candle_next.size();
 }
 
 } // namespace nlx::parsing::detail
