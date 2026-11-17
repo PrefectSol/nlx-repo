@@ -2,9 +2,9 @@
 #define NLX_EXCHANGE_OKX_CANDLE_STREAMER_H
 
 #include "core/file_descriptor.h"
+#include "core/market.h"
 #include "core/time.h"
 #include "exchange/okx_rate_limiter.h"
-#include "exchange/okx_types.h"
 #include "logging/logger_node.h"
 #include "network/websocket_client.h"
 
@@ -30,10 +30,10 @@ public:
 
     void initialize();
 
-    [[nodiscard]] bool resubscribe(std::span<const OkxInstrument> instruments) noexcept;
+    [[nodiscard]] bool resubscribe(std::span<const Instrument> instruments) noexcept;
 
     [[nodiscard]] bool poll(size_t &index) noexcept;
-    [[nodiscard]] bool extract(OkxCandle &candle) noexcept;
+    [[nodiscard]] bool extract(Candle &candle) noexcept;
 
     void heartbeat() noexcept;
     void close() noexcept;
@@ -55,13 +55,11 @@ private:
     static constexpr size_t kBackoffMilliseconds = 1000;
     static constexpr size_t kBackoffLimitMilliseconds = 30000;
 
-    static constexpr int kUpgradeNotice = 64008;
-
     static_assert(std::has_single_bit(kInstrumentsCapacity) && kInstrumentsCapacity < UINT16_MAX);
 
     struct Slot
     {
-        char id[OkxInstrument::kIdCapacity];
+        char id[Instrument::kIdCapacity];
         bool subscribed;
     };
 

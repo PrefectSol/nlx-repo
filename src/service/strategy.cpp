@@ -1,13 +1,14 @@
 #include "service/strategy.h"
 #include "core/fatal.h"
+#include "core/market.h"
 #include "core/time.h"
-#include "exchange/okx_types.h"
 #include "parsing/json_reader.h"
 
 #include <algorithm>
 #include <array>
 #include <format>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -22,7 +23,10 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_stop(),
     m_update(),
     m_okx_notify(),
+    m_okx_candles_epoll(),
+    m_okx_candles_notify(),
     m_initialized(false),
+    m_stopping(false),
     m_episodes(0),
     m_last_reinstruments(0),
     m_signals(),
@@ -34,6 +38,13 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_stop = FileDescriptor::make_eventfd(true);
     m_update = FileDescriptor::make_timerfd(milliseconds(kUpdateMilliseconds), milliseconds::zero(), true);
     m_okx_notify = FileDescriptor::make_eventfd(true);
+    m_okx_candles_epoll = FileDescriptor::make_epoll();
+
+    for (FileDescriptor &notify : m_okx_candles_notify)
+    {
+        notify = FileDescriptor::make_eventfd(true);
+        detail::epoll_add(m_okx_candles_epoll, notify);
+    }
 
     detail::epoll_add(m_epoll, m_stop);
     detail::epoll_add(m_epoll, m_update);
@@ -154,6 +165,11 @@ void Strategy::start() noexcept
     while (true)
     {
         const size_t count = detail::epoll_wait(m_epoll, { &event, 1 }, -1);
+        if (m_stopping.load(std::memory_order_acquire))
+        {
+            break;
+        }
+
         if (count == 0)
         {
             continue;
@@ -170,12 +186,6 @@ void Strategy::start() noexcept
             [[maybe_unused]] const uint64_t ticks = detail::drain(m_update);
             update();
         }
-
-        if (event.data.fd == m_stop)
-        {
-            [[maybe_unused]] const uint64_t result = detail::drain(m_stop);
-            break;
-        }
     }
 
     m_log.log("strategy stopped");
@@ -184,6 +194,7 @@ void Strategy::start() noexcept
 
 void Strategy::request_stop() noexcept
 {
+    m_stopping.store(true, std::memory_order_release);
     detail::notify(m_stop);
 }
 
@@ -262,7 +273,7 @@ bool Strategy::okx_reinstruments() noexcept
     const milliseconds today = detail::floor_days(now);
     const milliseconds since = today - days(kLiquidityDays);
 
-    std::array<exchange::OkxInstrument, kInstrumentsCapacity> instruments{};
+    std::array<Instrument, kInstrumentsCapacity> instruments{};
 
     int code = -1;
     size_t listed = 0;
@@ -293,69 +304,20 @@ bool Strategy::okx_reinstruments() noexcept
     size_t valid = 0;
     size_t liquid = 0;
 
-    std::span<exchange::OkxInstrument> listed_instruments = std::span(instruments).first(listed);
-    for (exchange::OkxInstrument &instrument : listed_instruments)
+    std::span<Instrument> listed_instruments = std::span(instruments).first(listed);
+
+    result = okx_load_liquidity(listed_instruments, today, detail::ceil_milliseconds(now), valid, liquid);
+    if (m_stopping.load(std::memory_order_acquire)) [[unlikely]]
     {
-        const std::string_view id(instrument.id);
-        std::array<exchange::OkxVolume, kLiquidityDays + 1> daily{};
+        m_log.log<logging::LogLevel::Warning>("okx instruments refresh interrupted: stop requested");
+        m_log.flush();
 
-        size_t count = 0;
-        result = okx_get_candles(request, code, id, "1Dutc", detail::ceil_milliseconds(now), std::span(daily), count);
-        if (!result)
-        {
-            if (request.code != 200 || code <= 0)
-            {
-                m_log.log<logging::LogLevel::Error>("okx {} get candles request failed: http = {}, code = {}", id, request.code, code);
-                m_log.flush();
+        return false;
+    }
 
-                return false;
-            }
-
-            m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: code = {}", id, code);
-            continue;
-        }
-
-        const size_t offset = count != 0 && milliseconds(daily[0].timestamp) == today ? 1 : 0;
-        if (count < offset + kLiquidityDays)
-        {
-            m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: days = {}", id, count - offset);
-            continue;
-        }
-
-        const std::span<const exchange::OkxVolume, kLiquidityDays> closed(daily.data() + offset, kLiquidityDays);
-
-        std::array<double, kLiquidityDays> volumes{};
-
-        bool confirmed = true;
-        bool consecutive = true;
-        for (size_t index = 0; index < kLiquidityDays; ++index)
-        {
-            const exchange::OkxVolume &volume = closed[index];
-
-            confirmed = confirmed && volume.confirmed;
-            consecutive = consecutive && milliseconds(volume.timestamp) == today - days(index + 1);
-            volumes[index] = volume.volume_usdt;
-        }
-
-        if (!confirmed) [[unlikely]]
-        {
-            m_log.log<logging::LogLevel::Warning>("okx {} get candles are not confirmed yet", id);
-            m_log.flush();
-
-            return false;
-        }
-
-        if (!consecutive)
-        {
-            m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: days are not consecutive", id);
-            continue;
-        }
-
-        const bool liquid_pass = liquid_filter(volumes);
-        instrument.accepted = liquid_pass;
-
-        liquid += static_cast<size_t>(liquid_pass);
-        ++valid;
+    if (!result)
+    {
+        return false;
     }
 
     if (valid == 0) [[unlikely]]
@@ -382,6 +344,157 @@ bool Strategy::okx_reinstruments() noexcept
 
     m_log.log("okx instruments resubscribed: instruments = {}", liquid);
     m_log.flush();
+
+    return true;
+}
+
+bool Strategy::okx_load_liquidity(std::span<Instrument> instruments, milliseconds today, milliseconds before, size_t &valid, size_t &liquid) noexcept
+{
+    char buffers[kCandlesSlots][kCandlesCapacity];
+    static_assert(kCandlesCapacity > parsing::json_padding_size);
+
+    std::array<std::optional<network::HttpRequest>, kCandlesSlots> requests{};
+    std::array<size_t, kCandlesSlots> owners{};
+
+    size_t next = 0;
+    size_t active = 0;
+    bool failed = false;
+
+    while (true)
+    {
+        while (active < kCandlesSlots && next < instruments.size() && !failed)
+        {
+            if (m_stopping.load(std::memory_order_acquire)) [[unlikely]]
+            {
+                break;
+            }
+
+            size_t slot = 0;
+            while (requests[slot].has_value())
+            {
+                ++slot;
+            }
+
+            network::HttpRequest &request = requests[slot].emplace(buffers[slot], kCandlesCapacity - parsing::json_padding_size, 0, 0, false, m_okx_candles_notify[slot]);
+            const std::string_view id(instruments[next].id);
+
+            const bool pushed = m_okx_http_client.get_candles(request, id, "1Dutc", before, static_cast<uint32_t>(kLiquidityDays + 1));
+            if (!pushed) [[unlikely]]
+            {
+                m_log.log<logging::LogLevel::Error>("okx {} get candles request rejected by http client", id);
+                m_log.flush();
+
+                requests[slot].reset();
+                failed = true;
+
+                break;
+            }
+
+            owners[slot] = next;
+
+            ++next;
+            ++active;
+        }
+
+        if (active == 0)
+        {
+            break;
+        }
+
+        epoll_event event{};
+        const size_t count = detail::epoll_wait(m_okx_candles_epoll, { &event, 1 }, -1);
+        if (count == 0)
+        {
+            continue;
+        }
+
+        size_t slot = 0;
+        while (m_okx_candles_notify[slot] != event.data.fd)
+        {
+            ++slot;
+        }
+
+        [[maybe_unused]] const uint64_t result = detail::drain(m_okx_candles_notify[slot]);
+
+        if (!failed)
+        {
+            failed = !okx_check_liquidity(*requests[slot], instruments[owners[slot]], today, valid, liquid);
+        }
+
+        requests[slot].reset();
+        --active;
+    }
+
+    return !failed;
+}
+
+bool Strategy::okx_check_liquidity(const network::HttpRequest &request, Instrument &instrument, milliseconds today, size_t &valid, size_t &liquid) noexcept
+{
+    const std::string_view id(instrument.id);
+
+    std::array<Volume, kLiquidityDays + 1> daily{};
+
+    int code = -1;
+    size_t count = 0;
+
+    bool result = parsing::detail::okx_parse_candles({ request.buffer, request.size }, code, daily, count);
+    result = result && request.code == 200 && code == 0;
+
+    if (!result)
+    {
+        if (request.code != 200 || code <= 0)
+        {
+            m_log.log<logging::LogLevel::Error>("okx {} get candles request failed: http = {}, code = {}", id, request.code, code);
+            m_log.flush();
+
+            return false;
+        }
+
+        m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: code = {}", id, code);
+        return true;
+    }
+
+    const size_t offset = count != 0 && milliseconds(daily[0].timestamp) == today ? 1 : 0;
+    if (count < offset + kLiquidityDays)
+    {
+        m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: days = {}", id, count - offset);
+        return true;
+    }
+
+    const std::span<const Volume, kLiquidityDays> closed(daily.data() + offset, kLiquidityDays);
+
+    std::array<double, kLiquidityDays> volumes{};
+
+    bool confirmed = true;
+    bool consecutive = true;
+    for (size_t index = 0; index < kLiquidityDays; ++index)
+    {
+        const Volume &volume = closed[index];
+
+        confirmed = confirmed && volume.confirmed;
+        consecutive = consecutive && milliseconds(volume.timestamp) == today - days(index + 1);
+        volumes[index] = volume.volume;
+    }
+
+    if (!confirmed) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx {} get candles are not confirmed yet", id);
+        m_log.flush();
+
+        return false;
+    }
+
+    if (!consecutive)
+    {
+        m_log.log<logging::LogLevel::Warning>("okx {} get candles rejected: days are not consecutive", id);
+        return true;
+    }
+
+    const bool liquid_pass = liquid_filter(volumes);
+    instrument.accepted = liquid_pass;
+
+    liquid += static_cast<size_t>(liquid_pass);
+    ++valid;
 
     return true;
 }
@@ -454,7 +567,7 @@ bool Strategy::okx_get_orders(network::HttpRequest &request, int &code, size_t &
     return result && request.code == 200 && code == 0;
 }
 
-bool Strategy::okx_get_instruments(network::HttpRequest &request, int &code, milliseconds listed_before, std::span<exchange::OkxInstrument> instruments,
+bool Strategy::okx_get_instruments(network::HttpRequest &request, int &code, milliseconds listed_before, std::span<Instrument> instruments,
                                    std::string_view instrument_type, std::string_view contract_type, std::string_view currency, std::string_view category,
                                    size_t &count, size_t &ignored) noexcept
 {
@@ -468,22 +581,6 @@ bool Strategy::okx_get_instruments(network::HttpRequest &request, int &code, mil
     detail::wait(request.notify);
     result = parsing::detail::okx_parse_instruments({ request.buffer, request.size },
                                                     code, currency, category, contract_type, listed_before, instruments, count, ignored);
-
-    return result && request.code == 200 && code == 0;
-}
-
-bool Strategy::okx_get_candles(network::HttpRequest &request, int &code, std::string_view instrument, std::string_view bar,
-                               milliseconds before, std::span<exchange::OkxVolume> volumes, size_t &count) noexcept
-{
-    code = -1;
-    bool result = m_okx_http_client.get_candles(request, instrument, bar, before, static_cast<uint32_t>(volumes.size()));
-    if (!result)
-    {
-        return false;
-    }
-
-    detail::wait(request.notify);
-    result = parsing::detail::okx_parse_candles({ request.buffer, request.size }, code, volumes, count);
 
     return result && request.code == 200 && code == 0;
 }

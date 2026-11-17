@@ -3,18 +3,18 @@
 
 #include "core/file_descriptor.h"
 #include "core/spsc_queue.h"
-#include "core/time.h"
 #include "core/string.h"
+#include "core/time.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <cassert>
 
 namespace nlx::logging
 {

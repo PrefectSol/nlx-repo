@@ -1,8 +1,8 @@
 #ifndef NLX_PARSING_ENV_READER_H
 #define NLX_PARSING_ENV_READER_H
 
-#include <string_view>
 #include <cstddef>
+#include <string_view>
 
 namespace nlx::parsing
 {

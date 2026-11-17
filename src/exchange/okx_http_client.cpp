@@ -58,13 +58,13 @@ OkxHttpClient::OkxHttpClient(const Credentials &credentials, OkxRateLimiter &lim
 {
     m_log = registry.create_node("okx_http");
 
-    const auto key =std::format_to_n(m_key, sizeof(m_key) - 1, "OK-ACCESS-KEY: {}", credentials.api_key);
+    const auto key =std::format_to_n(m_key, sizeof(m_key) - 1, "OK-ACCESS-KEY: {}", credentials.okx_api_key);
     if (static_cast<size_t>(key.size) >= kHeaderCapacity) [[unlikely]]
     {
         throw std::invalid_argument("okx header api key is too long");
     }
 
-    const auto passphrase = std::format_to_n(m_passphrase, sizeof(m_passphrase) - 1, "OK-ACCESS-PASSPHRASE: {}", credentials.api_passphrase);
+    const auto passphrase = std::format_to_n(m_passphrase, sizeof(m_passphrase) - 1, "OK-ACCESS-PASSPHRASE: {}", credentials.okx_api_passphrase);
     if (static_cast<size_t>(passphrase.size) >= kHeaderCapacity) [[unlikely]]
     {
         throw std::invalid_argument("okx header api passphrase is too long");
@@ -76,7 +76,7 @@ OkxHttpClient::OkxHttpClient(const Credentials &credentials, OkxRateLimiter &lim
         throw std::invalid_argument("okx header simulated is too long");
     }
 
-    nlx::detail::str_assign(m_secret, credentials.api_secret);
+    nlx::detail::str_assign(m_secret, credentials.okx_api_secret);
 
     m_stop = FileDescriptor::make_eventfd(true);
 }
@@ -190,7 +190,7 @@ bool OkxHttpClient::claim(size_t &index) noexcept
     do
     {
         index = static_cast<size_t>(std::countr_one(busy));
-        if (index == network::HttpClient::kTransfersSize) [[unlikely]]
+        if (index == network::HttpClient::transfers_size()) [[unlikely]]
         {
             return false;
         }
@@ -330,9 +330,9 @@ void OkxHttpClient::dispatch(size_t index) noexcept
 void OkxHttpClient::complete() noexcept
 {
     size_t index = 0;
-    network::HttpResult result{};
+    network::HttpResponse response{};
 
-    while (m_http_client.read(index, result))
+    while (m_http_client.read(index, response))
     {
         const Route &route = *m_slots[index].route;
         network::HttpRequest &request = *m_slots[index].request;
@@ -340,14 +340,14 @@ void OkxHttpClient::complete() noexcept
         if (request.code == -1) [[unlikely]]
         {
             m_log.log<logging::LogLevel::Error>("okx http {} failed in {} ms: curl = {}, http = {}, {}",
-                                                route.path, nlx::detail::ms(result.elapsed), result.error, result.status, result.message);
+                                                route.path, nlx::detail::ms(response.elapsed), response.error, response.status, response.message);
             m_log.log<logging::LogLevel::Error>("okx http {} stages: sent = {}, resolve = {} ms, connect = {} ms, handshake = {} ms",
-                                                route.path, result.sent, nlx::detail::ms(result.resolve),
-                                                nlx::detail::ms(result.connect), nlx::detail::ms(result.handshake));
+                                                route.path, response.sent, nlx::detail::ms(response.resolve),
+                                                nlx::detail::ms(response.connect), nlx::detail::ms(response.handshake));
         }
         else
         {
-            m_log.log("okx http {} {} in {} ms", route.path, request.code, nlx::detail::ms(result.elapsed));
+            m_log.log("okx http {} {} in {} ms", route.path, request.code, nlx::detail::ms(response.elapsed));
 
             if (request.truncated) [[unlikely]]
             {

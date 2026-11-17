@@ -5,6 +5,9 @@
 #include "core/file_descriptor.h"
 #include "core/system_error.h"
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <bit>
 #include <cstddef>
@@ -12,9 +15,6 @@
 #include <span>
 #include <stdexcept>
 #include <type_traits>
-
-#include <sys/mman.h>
-#include <unistd.h>
 
 namespace nlx
 {

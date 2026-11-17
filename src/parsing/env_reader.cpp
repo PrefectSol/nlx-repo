@@ -3,8 +3,8 @@
 #include "core/string.h"
 #include "core/system_error.h"
 
-#include <stdexcept>
 #include <format>
+#include <stdexcept>
 
 namespace nlx::parsing
 {

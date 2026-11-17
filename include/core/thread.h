@@ -1,11 +1,11 @@
 #ifndef NLX_CORE_THREAD_H
 #define NLX_CORE_THREAD_H
 
-#include <cstddef>
-#include <initializer_list>
-
 #include <pthread.h>
 #include <sched.h>
+
+#include <cstddef>
+#include <initializer_list>
 
 namespace nlx::thread
 {

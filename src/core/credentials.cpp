@@ -9,25 +9,25 @@ namespace nlx
 
 Credentials Credentials::load(const char *path)
 {
-    Credentials credentials{};
     const parsing::EnvReader reader(path);
 
-    bool result = string::safe_strcpy(credentials.api_key, reader.get("API_KEY"));
+    Credentials credentials{};
+    bool result = string::safe_strcpy(credentials.okx_api_key, reader.get("OKX_API_KEY"));
     if (!result)
     {
-        throw std::invalid_argument("API_KEY is too long");
+        throw std::invalid_argument("OKX_API_KEY is too long");
     }
 
-    result = string::safe_strcpy(credentials.api_secret, reader.get("API_SECRET"));
+    result = string::safe_strcpy(credentials.okx_api_secret, reader.get("OKX_API_SECRET"));
     if (!result)
     {
-        throw std::invalid_argument("API_SECRET is too long");
+        throw std::invalid_argument("OKX_API_SECRET is too long");
     }
 
-    result = string::safe_strcpy(credentials.api_passphrase, reader.get("API_PASSPHRASE"));
+    result = string::safe_strcpy(credentials.okx_api_passphrase, reader.get("OKX_API_PASSPHRASE"));
     if (!result)
     {
-        throw std::invalid_argument("API_PASSPHRASE is too long");
+        throw std::invalid_argument("OKX_API_PASSPHRASE is too long");
     }
 
     return credentials;

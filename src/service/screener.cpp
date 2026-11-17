@@ -109,7 +109,7 @@ void Screener<Streamer>::request_stop() noexcept
 }
 
 template<typename Streamer>
-bool Screener<Streamer>::resubscribe(std::span<const exchange::OkxInstrument> instruments) noexcept
+bool Screener<Streamer>::resubscribe(std::span<const Instrument> instruments) noexcept
 {
     Request request{ instruments, false };
 
@@ -207,7 +207,8 @@ void Screener<Streamer>::tick() noexcept
         m_stale = 0;
     }
 
-    if (++m_ticks < kStatusTicks)
+    ++m_ticks;
+    if (m_ticks < kStatusTicks)
     {
         return;
     }
@@ -215,8 +216,12 @@ void Screener<Streamer>::tick() noexcept
     m_ticks = 0;
 
     const size_t size = m_streamer.size();
-    const auto full = [](const Ring &ring) noexcept { return ring.full(); };
-    const size_t ready = static_cast<size_t>(std::count_if(m_rings.begin(), m_rings.begin() + static_cast<std::ptrdiff_t>(size), full));
+
+    size_t ready = 0;
+    for (size_t index = 0; index < size; ++index)
+    {
+        ready += static_cast<size_t>(m_rings[index].full());
+    }
 
     m_log.log("screener status: instruments = {}, ready = {}, blind = {}", size, ready, size - ready);
 }
@@ -229,7 +234,8 @@ void Screener<Streamer>::receive() noexcept
     {
         synchronize();
 
-        if (m_streamer.extract(m_rings[index].claim())) [[likely]]
+        const bool extracted = m_streamer.extract(m_rings[index].claim());
+        if (extracted) [[likely]]
         {
             accept(index);
         }
@@ -240,9 +246,9 @@ template<typename Streamer>
 void Screener<Streamer>::accept(size_t index) noexcept
 {
     Ring &ring = m_rings[index];
-    const exchange::OkxCandle &candle = ring.claim();
+    const Candle &candle = ring.claim();
 
-    if (!(candle.close > 0.0)) [[unlikely]]
+    if (candle.close <= 0.0) [[unlikely]]
     {
         m_log.log<logging::LogLevel::Error>("screener candle rejected: instrument = {}, timestamp = {}, close = {}",
                                             m_streamer.instrument(index), candle.timestamp, candle.close);
@@ -261,7 +267,7 @@ void Screener<Streamer>::accept(size_t index) noexcept
 
         if (candle.timestamp > expected) [[unlikely]]
         {
-            const exchange::OkxCandle copy = candle;
+            const Candle copy = candle;
 
             ++m_gaps;
             m_gap_index = index;
@@ -282,7 +288,8 @@ void Screener<Streamer>::accept(size_t index) noexcept
     double impulse = 0.0;
     double baseline = 0.0;
 
-    if (!filter(ring.history().template last<kFilterCandles>(), impulse, baseline)) [[likely]]
+    const bool passed = filter(ring.history().template last<kFilterCandles>(), impulse, baseline);
+    if (!passed) [[likely]]
     {
         return;
     }
@@ -292,7 +299,7 @@ void Screener<Streamer>::accept(size_t index) noexcept
 }
 
 template<typename Streamer>
-void Screener<Streamer>::notify(size_t index, const exchange::OkxCandle &candle, double impulse, double baseline) noexcept
+void Screener<Streamer>::notify(size_t index, const Candle &candle, double impulse, double baseline) noexcept
 {
     const std::string_view instrument = m_streamer.instrument(index);
 

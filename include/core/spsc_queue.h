@@ -3,11 +3,11 @@
 
 #define NO_USE_STDC_HARDWARE_DESTRUCTIVE_INTERFERENCE_SIZE
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
-#include <type_traits>
-#include <algorithm>
 #include <span>
+#include <type_traits>
 
 #ifndef NO_USE_STDC_HARDWARE_DESTRUCTIVE_INTERFERENCE_SIZE
 #include <new>

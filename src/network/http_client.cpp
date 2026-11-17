@@ -1,9 +1,10 @@
 #include "network/http_client.h"
 #include "core/fatal.h"
 
-#include <algorithm>
 #include <curl/curl.h>
 #include <curl/multi.h>
+
+#include <algorithm>
 #include <format>
 #include <stdexcept>
 
@@ -117,7 +118,7 @@ void HttpClient::initialize()
             easy_setopt(transfer.handle, CURLOPT_PREREQFUNCTION, prereq_callback);
             easy_setopt(transfer.handle, CURLOPT_PREREQDATA, static_cast<void *>(&transfer));
             easy_setopt(transfer.handle, CURLOPT_CAINFO, CA_CERT_PATH);
-            easy_setopt(transfer.handle, CURLOPT_TIMEOUT_MS, static_cast<long>(kTimeout.count()));
+            easy_setopt(transfer.handle, CURLOPT_TIMEOUT_MS, static_cast<long>(kTimeoutMilliseconds));
             easy_setopt(transfer.handle, CURLOPT_NOSIGNAL, 1L);
             easy_setopt(transfer.handle, CURLOPT_TCP_NODELAY, 1L);
         }
@@ -186,12 +187,18 @@ void HttpClient::perform() noexcept
     }
 }
 
-bool HttpClient::read(size_t &index, HttpResult &result) noexcept
+bool HttpClient::read(size_t &index, HttpResponse &response) noexcept
 {
     int queued = 0;
 
-    while (CURLMsg *message = curl_multi_info_read(m_multi, &queued))
+    while (true)
     {
+        CURLMsg *message = curl_multi_info_read(m_multi, &queued);
+        if (message == nullptr)
+        {
+            return false;
+        }
+
         if (message->msg != CURLMSG_DONE)
         {
             continue;
@@ -212,15 +219,15 @@ bool HttpClient::read(size_t &index, HttpResult &result) noexcept
         const bool received = (code == CURLE_OK || request.truncated) && status != 0;
         request.code = received ? static_cast<int>(status) : -1;
 
-        result.error = static_cast<int>(code);
-        result.status = static_cast<int>(status);
-        result.sent = transfer.sent;
-        result.message = transfer.error[0] != '\0' ? transfer.error : curl_easy_strerror(code);
+        response.error = static_cast<int>(code);
+        response.status = static_cast<int>(status);
+        response.sent = transfer.sent;
+        response.message = transfer.error[0] != '\0' ? transfer.error : curl_easy_strerror(code);
 
-        result.elapsed = info_time(handle, CURLINFO_TOTAL_TIME_T);
-        result.resolve = info_time(handle, CURLINFO_NAMELOOKUP_TIME_T);
-        result.connect = info_time(handle, CURLINFO_CONNECT_TIME_T);
-        result.handshake = info_time(handle, CURLINFO_APPCONNECT_TIME_T);
+        response.elapsed = info_time(handle, CURLINFO_TOTAL_TIME_T);
+        response.resolve = info_time(handle, CURLINFO_NAMELOOKUP_TIME_T);
+        response.connect = info_time(handle, CURLINFO_CONNECT_TIME_T);
+        response.handshake = info_time(handle, CURLINFO_APPCONNECT_TIME_T);
 
         release_handle(handle);
         transfer.request = nullptr;
@@ -229,8 +236,6 @@ bool HttpClient::read(size_t &index, HttpResult &result) noexcept
 
         return true;
     }
-
-    return false;
 }
 
 bool HttpClient::poll(milliseconds timeout, const FileDescriptor &fd) noexcept

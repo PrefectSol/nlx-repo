@@ -1,13 +1,13 @@
-#ifndef NLX_EXCHANGE_OKX_TYPES_H
-#define NLX_EXCHANGE_OKX_TYPES_H
+#ifndef NLX_CORE_MARKET_H
+#define NLX_CORE_MARKET_H
 
 #include <cstddef>
 #include <cstdint>
 
-namespace nlx::exchange
+namespace nlx
 {
 
-struct OkxInstrument
+struct Instrument
 {
     static constexpr size_t kIdCapacity = 32;
 
@@ -15,22 +15,22 @@ struct OkxInstrument
     bool accepted;
 };
 
-struct OkxCandle
+struct Candle
 {
     int64_t timestamp;
     double open;
     double high;
     double low;
     double close;
-    double volume_usdt;
+    double volume;
 };
 
-struct OkxVolume
+struct Volume
 {
     int64_t timestamp;
-    double volume_usdt;
+    double volume;
     bool confirmed;
 };
 
-} // namespace nlx::exchange
-#endif // !NLX_EXCHANGE_OKX_TYPES_H
+} // namespace nlx
+#endif // !NLX_CORE_MARKET_H

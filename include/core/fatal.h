@@ -5,10 +5,11 @@
 #define NLX_STR(x) NLX_STR_IMPL(x)
 #define NLX_FATAL(msg) ::nlx::fatal::fatal("[FATAL] " msg "\n  at " __FILE__ ":" NLX_STR(__LINE__) "\n")
 
+#include <unistd.h>
+
+#include <cerrno>
 #include <cstddef>
 #include <exception>
-#include <cerrno>
-#include <unistd.h>
 
 namespace nlx::fatal
 {

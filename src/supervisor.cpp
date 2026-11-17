@@ -1,16 +1,16 @@
 #include "supervisor.h"
-#include "core/time.h"
 #include "core/credentials.h"
+#include "core/fatal.h"
 #include "core/file_descriptor.h"
 #include "core/system_error.h"
-#include "core/fatal.h"
 #include "core/thread.h"
+#include "core/time.h"
 #include "logging/logger_registry.h"
 
-#include <unistd.h>
 #include <sched.h>
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
+#include <unistd.h>
 
 #include <csignal>
 #include <stdexcept>
@@ -103,11 +103,6 @@ Supervisor::~Supervisor()
 
 int Supervisor::start()
 {
-    constexpr size_t logger_stack_size = 2 * 1024 * 1024;
-    constexpr size_t okx_http_stack_size = 4 * 1024 * 1024;
-    constexpr size_t okx_screener_stack_size = 4 * 1024 * 1024;
-    constexpr size_t strategy_stack_size = 8 * 1024 * 1024;
-
     const pthread_t handle = thread::this_native_handle();
 
     bool configured = thread::set_name(handle, "nlx-supervisor");
@@ -120,7 +115,7 @@ int Supervisor::start()
     }
 
     m_logger.initialize();
-    m_logger_thread.start(m_logger, "nlx-logger", logger_stack_size, SCHED_OTHER, 0, {});
+    m_logger_thread.start(m_logger, "nlx-logger", 2 * 1024 * 1024, SCHED_OTHER, 0, {});
 
     m_log.log("supervisor started");
     m_log.log("logger directory: {}", m_logger.get_directory());
@@ -131,13 +126,13 @@ int Supervisor::start()
     try
     {
         m_okx_http_client.initialize();
-        m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", okx_http_stack_size, SCHED_OTHER, 0, {});
+        m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", 4 * 1024 * 1024, SCHED_OTHER, 0, {});
 
         m_okx_screener.initialize();
-        m_okx_screener_thread.start(m_okx_screener, "nlx-okx_gate", okx_screener_stack_size, SCHED_OTHER, 0, {});
+        m_okx_screener_thread.start(m_okx_screener, "nlx-okx_gate", 4 * 1024 * 1024, SCHED_OTHER, 0, {});
 
         m_strategy.initialize();
-        m_strategy_thread.start(m_strategy, "nlx-strategy", strategy_stack_size, SCHED_OTHER, 0, {});
+        m_strategy_thread.start(m_strategy, "nlx-strategy", 8 * 1024 * 1024, SCHED_OTHER, 0, {});
     }
     catch (const std::exception &exp)
     {

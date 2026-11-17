@@ -3,17 +3,18 @@
 #include "core/system_error.h"
 #include "core/time.h"
 
-#include <csignal>
-#include <utility>
-#include <cerrno>
 #include <fcntl.h>
 #include <poll.h>
-#include <unistd.h>
-#include <sys/mman.h>
 #include <sys/eventfd.h>
+#include <sys/mman.h>
+#include <sys/signalfd.h>
 #include <sys/timerfd.h>
 #include <sys/types.h>
-#include <sys/signalfd.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <csignal>
+#include <utility>
 
 namespace nlx
 {
@@ -260,17 +261,6 @@ void notify(const FileDescriptor &fd) noexcept
     if (result != sizeof(value)) [[unlikely]]
     {
         NLX_FATAL("nlx::detail::notify() write failed");
-    }
-}
-
-void arm(const FileDescriptor &timer, milliseconds delay) noexcept
-{
-    const itimerspec spec = to_itimerspec(milliseconds::zero(), delay);
-
-    const int result = ::timerfd_settime(timer.get(), 0, &spec, nullptr);
-    if (result != 0) [[unlikely]]
-    {
-        NLX_FATAL("nlx::detail::arm() timerfd_settime failed");
     }
 }
 

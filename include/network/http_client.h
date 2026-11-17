@@ -23,10 +23,11 @@ struct HttpRequest
     size_t size;
     int code;
     bool truncated;
+
     const FileDescriptor &notify;
 };
 
-struct HttpResult
+struct HttpResponse
 {
     int error;
     int status;
@@ -42,6 +43,8 @@ struct HttpResult
 class HttpClient
 {
 public:
+    using SlotMask = uint8_t;
+
     HttpClient();
     ~HttpClient() noexcept;
 
@@ -56,19 +59,18 @@ public:
     void launch(size_t index, bool post, const char *url, std::string_view body, HttpRequest &request) noexcept;
     void perform() noexcept;
 
-    [[nodiscard]] bool read(size_t &index, HttpResult &result) noexcept;
+    [[nodiscard]] bool read(size_t &index, HttpResponse &response) noexcept;
     [[nodiscard]] bool poll(milliseconds timeout, const FileDescriptor &fd) noexcept;
 
     void wakeup() noexcept;
     void release() noexcept;
 
-    using SlotMask = uint8_t;
-
-    static constexpr size_t kTransfersSize = std::numeric_limits<SlotMask>::digits;
-    static constexpr size_t kHeadersSize = 8;
+    [[nodiscard]] static constexpr size_t transfers_size() noexcept;
 
 private:
-    static constexpr milliseconds kTimeout{ 5000 };
+    static constexpr size_t kTransfersSize = std::numeric_limits<SlotMask>::digits;
+    static constexpr size_t kHeadersSize = 8;
+    static constexpr size_t kTimeoutMilliseconds = 5000;
 
     struct Transfer
     {
@@ -88,6 +90,11 @@ private:
     static size_t write_callback(char *data, size_t size, size_t nmemb, void *context) noexcept;
     static int prereq_callback(void *context, char *primary_ip, char *local_ip, int primary_port, int local_port) noexcept;
 };
+
+constexpr size_t HttpClient::transfers_size() noexcept
+{
+    return kTransfersSize;
+}
 
 } // nlx::network
 #endif // !NLX_NETWORK_HTTP_CLIENT_H

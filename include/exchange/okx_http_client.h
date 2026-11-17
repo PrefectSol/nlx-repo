@@ -4,9 +4,9 @@
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
 #include "core/time.h"
+#include "exchange/okx_rate_limiter.h"
 #include "logging/logger_node.h"
 #include "logging/logger_registry.h"
-#include "exchange/okx_rate_limiter.h"
 #include "network/http_client.h"
 
 #include <array>
@@ -95,7 +95,7 @@ private:
     char m_simulated[kHeaderCapacity];
     char m_secret[Credentials::kApiFieldCapacity];
 
-    std::array<Slot, network::HttpClient::kTransfersSize> m_slots;
+    std::array<Slot, network::HttpClient::transfers_size()> m_slots;
 
     std::atomic<SlotMask> m_busy;
     std::atomic<SlotMask> m_ready;

@@ -1,11 +1,11 @@
 #include "logging/logger.h"
-#include "logging/logger_node.h"
+#include "core/fatal.h"
 #include "core/file.h"
+#include "core/file_descriptor.h"
 #include "core/string.h"
 #include "core/system_error.h"
-#include "core/fatal.h"
-#include "core/file_descriptor.h"
 #include "core/time.h"
+#include "logging/logger_node.h"
 
 #include <linux/limits.h>
 

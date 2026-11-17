@@ -37,12 +37,12 @@ void OkxCandleStreamer::initialize()
     m_client.initialize();
 }
 
-bool OkxCandleStreamer::resubscribe(std::span<const OkxInstrument> instruments) noexcept
+bool OkxCandleStreamer::resubscribe(std::span<const Instrument> instruments) noexcept
 {
     m_size = 0;
     m_index.fill(0);
 
-    for (const OkxInstrument &instrument : instruments)
+    for (const Instrument &instrument : instruments)
     {
         if (!instrument.accepted)
         {
@@ -84,40 +84,36 @@ bool OkxCandleStreamer::poll(size_t &index) noexcept
         }
 
         std::string_view id;
+        bool confirmed = false;
 
-        const parsing::OkxCandleStatus status = parsing::detail::okx_parse_candle_head(text, id, m_body);
-        if (status == parsing::OkxCandleStatus::Updated) [[likely]]
+        const bool candle = parsing::detail::okx_parse_candle_head(text, id, m_body, confirmed);
+        if (!candle) [[unlikely]]
+        {
+            [[maybe_unused]] const bool response = dispatch(text);
+            continue;
+        }
+
+        if (!confirmed) [[likely]]
         {
             continue;
         }
 
-        if (status == parsing::OkxCandleStatus::Confirmed)
+        index = find(id);
+        if (index != m_size) [[likely]]
         {
-            index = find(id);
-            if (index != m_size) [[likely]]
-            {
-                return true;
-            }
-
-            m_log.log<logging::LogLevel::Warning>("okx candle streamer candle for unknown instrument: {}", id);
-            continue;
+            return true;
         }
 
-        if (status == parsing::OkxCandleStatus::Rejected) [[unlikely]]
-        {
-            m_log.log<logging::LogLevel::Error>("okx candle streamer candle rejected: {}", text);
-            continue;
-        }
-
-        [[maybe_unused]] const bool response = dispatch(text);
+        m_log.log<logging::LogLevel::Warning>("okx candle streamer candle for unknown instrument: {}", id);
     }
 
     return false;
 }
 
-bool OkxCandleStreamer::extract(OkxCandle &candle) noexcept
+bool OkxCandleStreamer::extract(Candle &candle) noexcept
 {
-    if (parsing::detail::okx_parse_candle_body(m_body, candle)) [[likely]]
+    const bool parsed = parsing::detail::okx_parse_candle_body(m_body, candle);
+    if (parsed) [[likely]]
     {
         return true;
     }
@@ -286,7 +282,10 @@ bool OkxCandleStreamer::subscribe() noexcept
         }
 
         std::string_view id;
-        if (parsing::detail::okx_parse_candle_head(text, id, m_body) != parsing::OkxCandleStatus::Unknown)
+        bool confirmed = false;
+
+        const bool candle = parsing::detail::okx_parse_candle_head(text, id, m_body, confirmed);
+        if (candle)
         {
             continue;
         }
@@ -451,7 +450,7 @@ bool OkxCandleStreamer::dispatch(std::string_view text) noexcept
     if (event == "notice")
     {
         m_log.log<logging::LogLevel::Warning>("okx candle streamer notice: code = {}, message = {}", code, message);
-        m_upgrade = m_upgrade || code == kUpgradeNotice;
+        m_upgrade = m_upgrade || code == 64008;
 
         return false;
     }

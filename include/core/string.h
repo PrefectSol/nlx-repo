@@ -1,14 +1,14 @@
 #ifndef NLX_CORE_STRING_H
 #define NLX_CORE_STRING_H
 
-#include <cctype>
+#include <algorithm>
 #include <cassert>
-#include <cstddef>
-#include <string_view>
-#include <cstring>
-#include <algorithm> 
+#include <cctype>
 #include <charconv>
 #include <concepts>
+#include <cstddef>
+#include <cstring>
+#include <string_view>
 
 namespace nlx::string 
 {

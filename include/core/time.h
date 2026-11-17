@@ -2,9 +2,10 @@
 #define NLX_CORE_TIME_H
 
 #include <sys/time.h>
+
+#include <array>
 #include <chrono>
 #include <format>
-#include <array>
 
 namespace nlx
 {

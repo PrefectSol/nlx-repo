@@ -1,9 +1,10 @@
 #ifndef NLX_CORE_FILE_H
 #define NLX_CORE_FILE_H
 
-#include <cstddef>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+
+#include <cstddef>
 
 namespace nlx::file
 {

@@ -2,10 +2,10 @@
 #define NLX_SERVICE_SCREENER_H
 
 #include "core/file_descriptor.h"
+#include "core/market.h"
 #include "core/ring_buffer.h"
 #include "core/spsc_queue.h"
 #include "exchange/okx_rate_limiter.h"
-#include "exchange/okx_types.h"
 #include "logging/logger_node.h"
 #include "logging/logger_registry.h"
 
@@ -21,7 +21,7 @@ namespace nlx::service
 
 struct ScreenerSignal
 {
-    char instrument[exchange::OkxInstrument::kIdCapacity];
+    char instrument[Instrument::kIdCapacity];
     int64_t timestamp;
     double impulse;
     double baseline;
@@ -51,7 +51,7 @@ public:
     void start() noexcept;
     void request_stop() noexcept;
 
-    [[nodiscard]] bool resubscribe(std::span<const exchange::OkxInstrument> instruments) noexcept;
+    [[nodiscard]] bool resubscribe(std::span<const Instrument> instruments) noexcept;
 
     void cooldown() noexcept;
 
@@ -59,7 +59,7 @@ public:
     [[nodiscard]] bool pop(ScreenerSignal &signal) noexcept;
     [[nodiscard]] size_t discard() noexcept;
 
-    [[nodiscard]] static bool filter(std::span<const exchange::OkxCandle, kFilterCandles> candles, double &impulse, double &baseline) noexcept;
+    [[nodiscard]] static bool filter(std::span<const Candle, kFilterCandles> candles, double &impulse, double &baseline) noexcept;
 
 private:
     static constexpr size_t kTimerMilliseconds = 1000;
@@ -71,11 +71,11 @@ private:
     static_assert(kBaselineCandles >= kWindowCandles);
     static_assert(kCooldownCandles >= kFilterCandles);
 
-    using Ring = RingBuffer<exchange::OkxCandle, kCooldownCandles>;
+    using Ring = RingBuffer<Candle, kCooldownCandles>;
 
     struct Request
     {
-        std::span<const exchange::OkxInstrument> instruments;
+        std::span<const Instrument> instruments;
         bool result;
     };
 
@@ -109,12 +109,12 @@ private:
     void receive() noexcept;
 
     void accept(size_t index) noexcept;
-    void notify(size_t index, const exchange::OkxCandle &candle, double impulse, double baseline) noexcept;
+    void notify(size_t index, const Candle &candle, double impulse, double baseline) noexcept;
 
     void synchronize() noexcept;
     void reset() noexcept;
 
-    [[nodiscard]] static double change(const exchange::OkxCandle &last, const exchange::OkxCandle &first) noexcept;
+    [[nodiscard]] static double change(const Candle &last, const Candle &first) noexcept;
 };
 
 } // namespace nlx::service
@@ -123,7 +123,7 @@ namespace nlx::service
 {
 
 template<typename Streamer>
-bool Screener<Streamer>::filter(std::span<const exchange::OkxCandle, kFilterCandles> candles, double &impulse, double &baseline) noexcept
+bool Screener<Streamer>::filter(std::span<const Candle, kFilterCandles> candles, double &impulse, double &baseline) noexcept
 {
     constexpr size_t step = kWindowCandles - 1;
     constexpr size_t windows = kBaselineCandles - step;
@@ -131,7 +131,7 @@ bool Screener<Streamer>::filter(std::span<const exchange::OkxCandle, kFilterCand
     impulse = change(candles[kFilterCandles - 1], candles[kFilterCandles - kWindowCandles]);
     baseline = 0.0;
 
-    if (!(impulse > kImpulseThreshold)) [[likely]]
+    if (impulse <= kImpulseThreshold) [[likely]]
     {
         return false;
     }
@@ -148,7 +148,7 @@ bool Screener<Streamer>::filter(std::span<const exchange::OkxCandle, kFilterCand
 }
 
 template<typename Streamer>
-double Screener<Streamer>::change(const exchange::OkxCandle &last, const exchange::OkxCandle &first) noexcept
+double Screener<Streamer>::change(const Candle &last, const Candle &first) noexcept
 {
     return std::abs(last.close - first.close) / first.close;
 }

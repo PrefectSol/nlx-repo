@@ -1,8 +1,8 @@
 #ifndef NLX_CORE_SYSTEM_ERROR_H
 #define NLX_CORE_SYSTEM_ERROR_H
 
-#include <system_error>
 #include <string>
+#include <system_error>
 
 namespace nlx 
 {

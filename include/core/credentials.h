@@ -10,10 +10,10 @@ struct Credentials
 {
     static constexpr size_t kApiFieldCapacity = 128;
 
-    char api_key[kApiFieldCapacity];
-    char api_secret[kApiFieldCapacity];
-    char api_passphrase[kApiFieldCapacity];
-    
+    char okx_api_key[kApiFieldCapacity];
+    char okx_api_secret[kApiFieldCapacity];
+    char okx_api_passphrase[kApiFieldCapacity];
+
     [[nodiscard]] static Credentials load(const char *path);
 };
 

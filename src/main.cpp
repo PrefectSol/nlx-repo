@@ -1,8 +1,8 @@
 #include "core/credentials.h"
 #include "supervisor.h"
 
-#include <iostream>
 #include <clocale>
+#include <iostream>
 #include <memory>
 
 int main(int argc, const char *argv[])

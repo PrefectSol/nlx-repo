@@ -1,8 +1,8 @@
 #ifndef NLX_PARSING_JSON_READER_H
 #define NLX_PARSING_JSON_READER_H
 
+#include "core/market.h"
 #include "core/time.h"
-#include "exchange/okx_types.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,14 +14,6 @@ namespace nlx::parsing
 
 inline constexpr size_t json_padding_size = 64;
 
-enum class OkxCandleStatus : uint8_t
-{
-    Updated,
-    Confirmed,
-    Rejected,
-    Unknown
-};
-
 namespace detail
 {
 
@@ -32,11 +24,11 @@ namespace detail
 [[nodiscard]] bool okx_parse_positions(std::string_view json, int &code, size_t &count) noexcept;
 [[nodiscard]] bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept;
 [[nodiscard]] bool okx_parse_instruments(std::string_view json, int &code, std::string_view settle, std::string_view category, std::string_view contract_type,
-                                         milliseconds listed_before, std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept;
-[[nodiscard]] bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxVolume> volumes, size_t &count) noexcept;
+                                         milliseconds listed_before, std::span<Instrument> instruments, size_t &count, size_t &ignored) noexcept;
+[[nodiscard]] bool okx_parse_candles(std::string_view json, int &code, std::span<Volume> volumes, size_t &count) noexcept;
 [[nodiscard]] bool okx_parse_event(std::string_view json, std::string_view &event, std::string_view &instrument, int &code, std::string_view &message) noexcept;
-[[nodiscard]] OkxCandleStatus okx_parse_candle_head(std::string_view json, std::string_view &instrument, std::string_view &body) noexcept;
-[[nodiscard]] bool okx_parse_candle_body(std::string_view body, exchange::OkxCandle &candle) noexcept;
+[[nodiscard]] bool okx_parse_candle_head(std::string_view json, std::string_view &instrument, std::string_view &body, bool &confirmed) noexcept;
+[[nodiscard]] bool okx_parse_candle_body(std::string_view body, Candle &candle) noexcept;
 
 } // namespace nlx::parsing::detail
 } // namespace nlx::parsing

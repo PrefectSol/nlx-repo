@@ -3,11 +3,11 @@
 
 #include "core/time.h"
 
-#include <ws_client/ws_client.hpp>
 #include <ws_client/transport/builtin/DnsResolver.hpp>
 #include <ws_client/transport/builtin/OpenSslContext.hpp>
 #include <ws_client/transport/builtin/OpenSslSocket.hpp>
 #include <ws_client/transport/builtin/TcpSocket.hpp>
+#include <ws_client/ws_client.hpp>
 
 #include <cstddef>
 #include <cstdint>

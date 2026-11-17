@@ -3,10 +3,11 @@
 
 #include "core/time.h"
 
+#include <sys/epoll.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <sys/epoll.h>
 
 namespace nlx
 {
@@ -55,7 +56,6 @@ void epoll_unwatch(const FileDescriptor &epoll_fd, int fd) noexcept;
 [[nodiscard]] size_t epoll_wait(const FileDescriptor &epoll_fd, std::span<epoll_event> events, int timeout) noexcept;
 
 void notify(const FileDescriptor &fd) noexcept;
-void arm(const FileDescriptor &timer, milliseconds delay) noexcept;
 [[nodiscard]] int receive(const FileDescriptor &fd) noexcept;
 [[nodiscard]] uint64_t drain(const FileDescriptor &fd) noexcept;
 

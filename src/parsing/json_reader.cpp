@@ -4,7 +4,6 @@
 #include <simdjson.h>
 
 #include <charconv>
-#include <cstring>
 
 namespace nlx::parsing::detail
 {
@@ -23,36 +22,55 @@ bool to_number(std::string_view text, T &value) noexcept
     return result.ec == std::errc() && result.ptr == end;
 }
 
-constexpr std::string_view okx_candle_head = R"({"arg":{"channel":"candle1m","instId":")";
-constexpr std::string_view okx_candle_body = R"("},"data":[[")";
-constexpr std::string_view okx_candle_next = R"(",")";
-constexpr std::string_view okx_candle_rows = R"(],[)";
-constexpr std::string_view okx_candle_updated = R"(","0"]]})";
-constexpr std::string_view okx_candle_confirmed = R"(","1"]]})";
-
-bool next_field(const char *&cursor, const char *end, const char *position) noexcept
+bool consume_prefix(std::string_view &text, std::string_view prefix) noexcept
 {
-    const size_t size = okx_candle_next.size();
-    if (static_cast<size_t>(end - position) < size || std::memcmp(position, okx_candle_next.data(), size) != 0) [[unlikely]]
+    const bool matched = text.starts_with(prefix);
+    if (matched)
+    {
+        text.remove_prefix(prefix.size());
+    }
+
+    return matched;
+}
+
+bool consume_suffix(std::string_view &text, std::string_view suffix) noexcept
+{
+    const bool matched = text.ends_with(suffix);
+    if (matched)
+    {
+        text.remove_suffix(suffix.size());
+    }
+
+    return matched;
+}
+
+template<typename T>
+bool read_field(std::string_view &text, T &value) noexcept
+{
+    const char *const end = text.data() + text.size();
+
+    const std::from_chars_result result = std::from_chars(text.data(), end, value);
+    if (result.ec != std::errc())
     {
         return false;
     }
 
-    cursor = position + size;
-    return true;
+    text.remove_prefix(static_cast<size_t>(result.ptr - text.data()));
+
+    return text.empty() || consume_prefix(text, R"(",")");
 }
 
-template<typename T>
-bool read_field(const char *&cursor, const char *end, T &value) noexcept
+bool skip_field(std::string_view &text) noexcept
 {
-    const std::from_chars_result result = std::from_chars(cursor, end, value);
-    return result.ec == std::errc() && next_field(cursor, end, result.ptr);
-}
+    const size_t quote = text.find('"');
+    if (quote == std::string_view::npos)
+    {
+        return false;
+    }
 
-bool skip_field(const char *&cursor, const char *end) noexcept
-{
-    const void *const quote = std::memchr(cursor, '"', static_cast<size_t>(end - cursor));
-    return quote != nullptr && next_field(cursor, end, static_cast<const char *>(quote));
+    text.remove_prefix(quote);
+
+    return consume_prefix(text, R"(",")");
 }
 
 simdjson::dom::parser &parser() noexcept
@@ -64,15 +82,12 @@ simdjson::dom::parser &parser() noexcept
 bool parse(std::string_view json, int &code, simdjson::dom::array &data) noexcept
 {
     simdjson::dom::element root;
-
-    const simdjson::error_code result = parser().parse(json.data(), json.size(), false).get(root); 
-    if (result != simdjson::SUCCESS)
-    {
-        return false;
-    }
+    bool parsed = parser().parse(json.data(), json.size(), false).get(root) == simdjson::SUCCESS;
 
     std::string_view text;
-    if (root["code"].get(text) != simdjson::SUCCESS || !to_number(text, code))
+    parsed = parsed && root["code"].get(text) == simdjson::SUCCESS;
+
+    if (!parsed || !to_number(text, code))
     {
         return false;
     }
@@ -183,7 +198,6 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
     }
 
     simdjson::dom::array assets;
-
     bool parsed = data.at(0)["details"].get(assets) == simdjson::SUCCESS;
     if (!parsed)
     {
@@ -195,7 +209,6 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
     {
         std::string_view name;
         parsed = asset["ccy"].get(name) == simdjson::SUCCESS;
-
         if (!parsed)
         {
             return false;
@@ -208,7 +221,7 @@ bool okx_parse_balance(std::string_view json, int &code, double &available, std:
 
         std::string_view text;
         parsed = asset["availEq"].get(text) == simdjson::SUCCESS;
-        
+
         return parsed && to_number(text, available);
     }
 
@@ -272,7 +285,7 @@ bool okx_parse_orders(std::string_view json, int &code, size_t &count) noexcept
 }
 
 bool okx_parse_instruments(std::string_view json, int &code, std::string_view settle, std::string_view category, std::string_view contract_type,
-                           milliseconds listed_before, std::span<exchange::OkxInstrument> instruments, size_t &count, size_t &ignored) noexcept
+                           milliseconds listed_before, std::span<Instrument> instruments, size_t &count, size_t &ignored) noexcept
 {
     simdjson::dom::array data;
 
@@ -344,7 +357,7 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
             continue;
         }
 
-        exchange::OkxInstrument &target = instruments[count];
+        Instrument &target = instruments[count];
         if (!string::safe_strcpy(target.id, id))
         {
             ++ignored;
@@ -357,7 +370,7 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
     return true;
 }
 
-bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::OkxVolume> volumes, size_t &count) noexcept
+bool okx_parse_candles(std::string_view json, int &code, std::span<Volume> volumes, size_t &count) noexcept
 {
     simdjson::dom::array data;
 
@@ -397,22 +410,13 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
 
         std::string_view confirm;
         parsed = parsed && fields.at(8).get(confirm) == simdjson::SUCCESS;
-        
-        if (!parsed)
+
+        Volume &target = volumes[count];
+        if (!parsed || !to_number(stamp, target.timestamp) || !to_number(volume, target.volume))
         {
             return false;
         }
 
-        int64_t timestamp = 0;
-        double volume_usdt = 0.0;
-        if (!to_number(stamp, timestamp) || !to_number(volume, volume_usdt))
-        {
-            return false;
-        }
-
-        exchange::OkxVolume &target = volumes[count];
-        target.timestamp = timestamp;
-        target.volume_usdt = volume_usdt;
         target.confirmed = confirm == "1";
 
         ++count;
@@ -424,9 +428,10 @@ bool okx_parse_candles(std::string_view json, int &code, std::span<exchange::Okx
 bool okx_parse_event(std::string_view json, std::string_view &event, std::string_view &instrument, int &code, std::string_view &message) noexcept
 {
     simdjson::dom::element root;
+    bool parsed = parser().parse(json.data(), json.size(), false).get(root) == simdjson::SUCCESS;
+    parsed = parsed && root["event"].get(event) == simdjson::SUCCESS;
 
-    const simdjson::error_code result = parser().parse(json.data(), json.size(), false).get(root);
-    if (result != simdjson::SUCCESS || root["event"].get(event) != simdjson::SUCCESS)
+    if (!parsed)
     {
         return false;
     }
@@ -436,18 +441,20 @@ bool okx_parse_event(std::string_view json, std::string_view &event, std::string
     code = 0;
 
     simdjson::dom::element argument;
-    if (root["arg"].get(argument) == simdjson::SUCCESS && argument["instId"].get(instrument) != simdjson::SUCCESS)
-    {
-        return false;
-    }
+    const bool has_argument = root["arg"].get(argument) == simdjson::SUCCESS;
+    parsed = !has_argument || argument["instId"].get(instrument) == simdjson::SUCCESS;
 
     std::string_view text;
-    if (root["code"].get(text) == simdjson::SUCCESS && !to_number(text, code))
+    const bool has_code = root["code"].get(text) == simdjson::SUCCESS;
+    parsed = parsed && (!has_code || to_number(text, code));
+
+    if (!parsed)
     {
         return false;
     }
 
-    if (root["msg"].get(message) != simdjson::SUCCESS)
+    const bool has_message = root["msg"].get(message) == simdjson::SUCCESS;
+    if (!has_message)
     {
         message = std::string_view();
     }
@@ -455,53 +462,52 @@ bool okx_parse_event(std::string_view json, std::string_view &event, std::string
     return true;
 }
 
-OkxCandleStatus okx_parse_candle_head(std::string_view json, std::string_view &instrument, std::string_view &body) noexcept
+bool okx_parse_candle_head(std::string_view json, std::string_view &instrument, std::string_view &body, bool &confirmed) noexcept
 {
-    if (!json.starts_with(okx_candle_head)) [[unlikely]]
+    std::string_view text = json;
+
+    bool parsed = consume_prefix(text, R"({"arg":{"channel":"candle1m","instId":")");
+    if (!parsed) [[unlikely]]
     {
-        return OkxCandleStatus::Unknown;
+        return false;
     }
 
-    const size_t begin = okx_candle_head.size();
+    confirmed = consume_suffix(text, R"(","1"]]})");
+    parsed = confirmed || consume_suffix(text, R"(","0"]]})");
 
-    if (json.ends_with(okx_candle_updated)) [[likely]]
+    const size_t quote = text.find('"');
+    parsed = parsed && quote != 0 && quote != std::string_view::npos;
+
+    if (!parsed) [[unlikely]]
     {
-        const bool single = json.find(okx_candle_rows, begin) == std::string_view::npos;
-        return single ? OkxCandleStatus::Updated : OkxCandleStatus::Rejected;
+        return false;
     }
 
-    if (!json.ends_with(okx_candle_confirmed)) [[unlikely]]
-    {
-        return OkxCandleStatus::Rejected;
-    }
+    instrument = text.substr(0, quote);
+    text.remove_prefix(quote);
 
-    const size_t quote = json.find('"', begin);
-    if (quote == begin || quote == std::string_view::npos || !json.substr(quote).starts_with(okx_candle_body)) [[unlikely]]
-    {
-        return OkxCandleStatus::Rejected;
-    }
+    parsed = consume_prefix(text, R"("},"data":[[")");
+    parsed = parsed && text.find(R"(],[)") == std::string_view::npos;
 
-    instrument = json.substr(begin, quote - begin);
-    body = json.substr(quote + okx_candle_body.size());
+    body = text;
 
-    return OkxCandleStatus::Confirmed;
+    return parsed;
 }
 
-bool okx_parse_candle_body(std::string_view body, exchange::OkxCandle &candle) noexcept
+bool okx_parse_candle_body(std::string_view body, Candle &candle) noexcept
 {
-    const char *cursor = body.data();
-    const char *const end = cursor + body.size();
+    std::string_view text = body;
 
-    bool parsed = read_field(cursor, end, candle.timestamp);
-    parsed = parsed && read_field(cursor, end, candle.open);
-    parsed = parsed && read_field(cursor, end, candle.high);
-    parsed = parsed && read_field(cursor, end, candle.low);
-    parsed = parsed && read_field(cursor, end, candle.close);
-    parsed = parsed && skip_field(cursor, end);
-    parsed = parsed && skip_field(cursor, end);
-    parsed = parsed && read_field(cursor, end, candle.volume_usdt);
+    bool parsed = read_field(text, candle.timestamp);
+    parsed = parsed && read_field(text, candle.open);
+    parsed = parsed && read_field(text, candle.high);
+    parsed = parsed && read_field(text, candle.low);
+    parsed = parsed && read_field(text, candle.close);
+    parsed = parsed && skip_field(text);
+    parsed = parsed && skip_field(text);
+    parsed = parsed && read_field(text, candle.volume);
 
-    return parsed && static_cast<size_t>(end - cursor) == okx_candle_confirmed.size() - okx_candle_next.size();
+    return parsed && text.empty();
 }
 
 } // namespace nlx::parsing::detail

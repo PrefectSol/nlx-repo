@@ -204,13 +204,15 @@ WebsocketStatus WebsocketClient::read(std::string_view &text, milliseconds timeo
 
     auto result = m_client->read_message(*m_buffer, timeout);
 
-    if (const ws_client::Message *message = std::get_if<ws_client::Message>(&result)) [[likely]]
+    const ws_client::Message *message = std::get_if<ws_client::Message>(&result);
+    if (message != nullptr) [[likely]]
     {
         text = message->to_string_view();
         return WebsocketStatus::Message;
     }
 
-    if (ws_client::PingFrame *ping = std::get_if<ws_client::PingFrame>(&result))
+    ws_client::PingFrame *ping = std::get_if<ws_client::PingFrame>(&result);
+    if (ping != nullptr)
     {
         const auto pong = m_client->send_pong_frame(ping->payload_bytes(), milliseconds(kWriteMilliseconds));
         if (!pong.has_value()) [[unlikely]]
@@ -227,7 +229,8 @@ WebsocketStatus WebsocketClient::read(std::string_view &text, milliseconds timeo
         return WebsocketStatus::Control;
     }
 
-    if (const ws_client::CloseFrame *frame = std::get_if<ws_client::CloseFrame>(&result))
+    const ws_client::CloseFrame *frame = std::get_if<ws_client::CloseFrame>(&result);
+    if (frame != nullptr)
     {
         const auto written = std::format_to_n(m_error, kErrorCapacity - 1, "close code = {}, reason = {}",
                                               static_cast<int>(frame->get_close_code()), frame->get_reason());
