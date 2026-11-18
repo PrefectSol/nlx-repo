@@ -42,6 +42,9 @@ public:
     [[nodiscard]] bool get_candles(network::HttpRequest &request, std::string_view instrument, std::string_view bar, milliseconds after, uint32_t limit) noexcept;
     [[nodiscard]] bool set_position_mode(network::HttpRequest &request, bool hedge) noexcept;
     [[nodiscard]] bool set_account_mode(network::HttpRequest &request, uint32_t level) noexcept;
+    [[nodiscard]] bool get_trade_fee(network::HttpRequest &request, std::string_view type) noexcept;
+    [[nodiscard]] bool get_position_tiers(network::HttpRequest &request, std::string_view type, std::string_view mode, std::string_view family) noexcept;
+    [[nodiscard]] bool set_leverage(network::HttpRequest &request, std::string_view instrument, double leverage, std::string_view side) noexcept;
 
 private:
     using SlotMask = network::HttpClient::SlotMask;
@@ -80,6 +83,9 @@ private:
     static constexpr Route kCandlesRoute{ HttpCandles, false, "/api/v5/market/candles" };
     static constexpr Route kSetPositionModeRoute{ HttpSetPositionMode, true, "/api/v5/account/set-position-mode" };
     static constexpr Route kSetAccountModeRoute{ HttpSetAccountMode, true, "/api/v5/account/set-account-level" };
+    static constexpr Route kTradeFeeRoute{ HttpTradeFee, false, "/api/v5/account/trade-fee" };
+    static constexpr Route kPositionTiersRoute{ HttpPositionTiers, false, "/api/v5/public/position-tiers" };
+    static constexpr Route kSetLeverageRoute{ HttpSetLeverage, true, "/api/v5/account/set-leverage" };
 
     logging::LoggerNode m_log;
     OkxRateLimiter &m_limiter;

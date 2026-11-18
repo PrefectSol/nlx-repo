@@ -315,6 +315,7 @@ void Screener<Streamer>::notify(size_t index, const Candle &candle, double impul
 
     nlx::detail::str_assign(signal->instrument, instrument);
     signal->timestamp = candle.timestamp;
+    signal->close = candle.close;
     signal->impulse = impulse;
     signal->baseline = baseline;
     signal->generation = m_generation;

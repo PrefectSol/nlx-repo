@@ -23,6 +23,7 @@ struct ScreenerSignal
 {
     char instrument[Instrument::kIdCapacity];
     int64_t timestamp;
+    double close;
     double impulse;
     double baseline;
     uint64_t generation;

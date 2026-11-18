@@ -43,10 +43,14 @@ Supervisor::Supervisor(const Credentials &credentials) :
     m_log(),
     m_okx_rate_limiter(),
     m_okx_http_client(m_credentials, m_okx_rate_limiter, m_registry),
+    m_okx_account(m_credentials, m_okx_rate_limiter, m_registry),
+    m_okx_market(m_okx_rate_limiter, m_registry),
     m_okx_screener(m_okx_rate_limiter, m_registry),
-    m_strategy(m_okx_http_client, m_okx_screener, m_registry),
+    m_strategy(m_okx_http_client, m_okx_screener, m_okx_market, m_okx_account, m_registry),
     m_logger_thread(),
     m_okx_http_thread(),
+    m_okx_account_thread(),
+    m_okx_market_thread(),
     m_okx_screener_thread(),
     m_strategy_thread(),
     m_epoll(),
@@ -88,6 +92,18 @@ Supervisor::~Supervisor()
         m_okx_screener_thread.join();
     }
 
+    if (m_okx_market_thread.joinable())
+    {
+        m_okx_market.request_stop();
+        m_okx_market_thread.join();
+    }
+
+    if (m_okx_account_thread.joinable())
+    {
+        m_okx_account.request_stop();
+        m_okx_account_thread.join();
+    }
+
     if (m_okx_http_thread.joinable())
     {
         m_okx_http_client.request_stop();
@@ -127,6 +143,12 @@ int Supervisor::start()
     {
         m_okx_http_client.initialize();
         m_okx_http_thread.start(m_okx_http_client, "nlx-okx_http", 4 * 1024 * 1024, SCHED_OTHER, 0, {});
+
+        m_okx_account.initialize();
+        m_okx_account_thread.start(m_okx_account, "nlx-okx_account", 4 * 1024 * 1024, SCHED_OTHER, 0, {});
+
+        m_okx_market.initialize();
+        m_okx_market_thread.start(m_okx_market, "nlx-okx_market", 4 * 1024 * 1024, SCHED_OTHER, 0, {});
 
         m_okx_screener.initialize();
         m_okx_screener_thread.start(m_okx_screener, "nlx-okx_gate", 4 * 1024 * 1024, SCHED_OTHER, 0, {});

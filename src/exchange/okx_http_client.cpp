@@ -259,6 +259,21 @@ bool OkxHttpClient::set_account_mode(network::HttpRequest &request, uint32_t lev
     return push(kSetAccountModeRoute, request, R"({{"acctLv":"{}"}})", level);
 }
 
+bool OkxHttpClient::get_trade_fee(network::HttpRequest &request, std::string_view type) noexcept
+{
+    return push(kTradeFeeRoute, request, "?instType={}", type);
+}
+
+bool OkxHttpClient::get_position_tiers(network::HttpRequest &request, std::string_view type, std::string_view mode, std::string_view family) noexcept
+{
+    return push(kPositionTiersRoute, request, "?instType={}&tdMode={}&instFamily={}", type, mode, family);
+}
+
+bool OkxHttpClient::set_leverage(network::HttpRequest &request, std::string_view instrument, double leverage, std::string_view side) noexcept
+{
+    return push(kSetLeverageRoute, request, R"({{"instId":"{}","lever":"{}","mgnMode":"isolated","posSide":"{}"}})", instrument, leverage, side);
+}
+
 milliseconds OkxHttpClient::schedule() noexcept
 {
     SlotMask pending = static_cast<SlotMask>(m_ready.load(std::memory_order_acquire) & ~m_launched);

@@ -23,8 +23,13 @@ enum OkxRequest : size_t
     HttpCandles,
     HttpSetPositionMode,
     HttpSetAccountMode,
+    HttpTradeFee,
+    HttpPositionTiers,
+    HttpSetLeverage,
     WebsocketConnect,
     WebsocketBusinessSubscribe,
+    WebsocketPublicSubscribe,
+    WebsocketPrivateSubscribe,
     OkxRequestsSize
 };
 
@@ -76,7 +81,12 @@ private:
         { 40, seconds(2) },
         { 5, seconds(2) },
         { 5, seconds(2) },
+        { 5, seconds(2) },
+        { 10, seconds(2) },
+        { 20, seconds(2) },
         { 3, seconds(1) },
+        { 480, minutes(60) },
+        { 480, minutes(60) },
         { 480, minutes(60) }
     }};
 

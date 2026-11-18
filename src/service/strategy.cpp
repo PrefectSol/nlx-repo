@@ -3,6 +3,7 @@
 #include "core/market.h"
 #include "core/time.h"
 #include "parsing/json_reader.h"
+#include "service/minimum_order.h"
 
 #include <algorithm>
 #include <array>
@@ -15,20 +16,48 @@
 namespace nlx::service
 {
 
-Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::OkxCandleStreamer> &okx_screener, logging::LoggerRegistry &registry) :
+namespace
+{
+
+constexpr std::string_view stage_name(uint8_t stage) noexcept
+{
+    constexpr std::array<std::string_view, 6> names = { "idle", "tiers", "leverage long", "leverage short", "warmup", "ready" };
+    return stage < names.size() ? names[stage] : "unknown";
+}
+
+} // namespace
+
+Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::OkxCandleStreamer> &okx_screener,
+                   Market<exchange::OkxMarketStreamer> &okx_market, Account<exchange::OkxAccountStreamer> &okx_account,
+                   logging::LoggerRegistry &registry) :
     m_log(),
     m_okx_http_client(okx_http_client),
     m_okx_screener(okx_screener),
+    m_okx_market(okx_market),
+    m_okx_account(okx_account),
     m_epoll(),
     m_stop(),
     m_update(),
+    m_tick(),
     m_okx_notify(),
     m_okx_candles_epoll(),
     m_okx_candles_notify(),
+    m_okx_episodes_notify(),
     m_initialized(false),
     m_stopping(false),
-    m_episodes(0),
     m_last_reinstruments(0),
+    m_instruments(),
+    m_instruments_size(0),
+    m_fees(),
+    m_fees_size(0),
+    m_balance(),
+    m_balance_at(0),
+    m_episodes(),
+    m_histories(),
+    m_requests(),
+    m_buffers(),
+    m_opened(0),
+    m_active(0),
     m_signals(),
     m_signals_head(0)
 {
@@ -37,6 +66,7 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_epoll = FileDescriptor::make_epoll();
     m_stop = FileDescriptor::make_eventfd(true);
     m_update = FileDescriptor::make_timerfd(milliseconds(kUpdateMilliseconds), milliseconds::zero(), true);
+    m_tick = FileDescriptor::make_timerfd(milliseconds(kTickMilliseconds), true);
     m_okx_notify = FileDescriptor::make_eventfd(true);
     m_okx_candles_epoll = FileDescriptor::make_epoll();
 
@@ -46,9 +76,18 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
         detail::epoll_add(m_okx_candles_epoll, notify);
     }
 
+    for (FileDescriptor &notify : m_okx_episodes_notify)
+    {
+        notify = FileDescriptor::make_eventfd(true);
+        detail::epoll_add(m_epoll, notify);
+    }
+
     detail::epoll_add(m_epoll, m_stop);
     detail::epoll_add(m_epoll, m_update);
+    detail::epoll_add(m_epoll, m_tick);
     detail::epoll_add(m_epoll, m_okx_screener.signals());
+    detail::epoll_add(m_epoll, m_okx_market.events());
+    detail::epoll_add(m_epoll, m_okx_account.events());
 }
 
 void Strategy::initialize()
@@ -142,6 +181,39 @@ void Strategy::initialize()
         m_log.flush();
     }
 
+    result = okx_get_fees(request, code, m_fees, m_fees_size);
+    if (!result || m_fees_size == 0)
+    {
+        throw std::runtime_error(std::format("okx get trade fee request failed: http = {}, code = {}", request.code, code));
+    }
+
+    for (size_t index = 0; index < m_fees_size; ++index)
+    {
+        const Fee &fee = m_fees[index];
+        m_log.log("okx swap fee group {}: maker = {}, taker = {}", fee.group, fee.maker, fee.taker);
+    }
+
+    m_log.flush();
+
+    Balance balance{};
+    result = okx_get_balance(request, code, "USDT", balance);
+    if (!result)
+    {
+        throw std::runtime_error(std::format("okx get balance request failed: http = {}, code = {}", request.code, code));
+    }
+
+    m_log.log("okx balance: equity = {}, available = {}, isolated pnl = {}", balance.equity, balance.available, balance.isolated_pnl);
+    m_log.flush();
+
+    m_balance = balance;
+    m_balance_at = time::now_monotonic();
+
+    if (balance.equity <= 0.0)
+    {
+        m_log.log<logging::LogLevel::Warning>("okx balance is empty: episodes will be rejected");
+        m_log.flush();
+    }
+
     m_last_reinstruments = time::now_monotonic() - minutes(kInstrumentsRefreshMinutes) - detail::ceil_minutes(milliseconds(kUpdateMilliseconds));
 
     m_initialized.store(true, std::memory_order_release);
@@ -158,7 +230,9 @@ void Strategy::start() noexcept
     m_log.log("instruments refresh minutes: {}", kInstrumentsRefreshMinutes);
     m_log.log("instruments liquidity days: {}", kLiquidityDays);
     m_log.log("instruments liquidity threshold: {}", kLiquidityThreshold);
-    m_log.log("signals cooldown: threshold = {}, minutes = {}", kSignalThreshold, kSignalMinutes);
+    m_log.log("cascade: signals = {}, minutes = {}", kCascadeSignals, kCascadeMinutes);
+    m_log.log("episodes: capacity = {}, minutes = {}, warmup minutes = {}, history bars = {}, leverage = {}",
+              kEpisodesCapacity, kEpisodeMinutes, kWarmupMinutes, kHistoryBars, kLeverage);
     m_log.flush();
 
     epoll_event event{};
@@ -175,10 +249,37 @@ void Strategy::start() noexcept
             continue;
         }
 
+        if (event.data.fd == m_okx_market.events())
+        {
+            [[maybe_unused]] const uint64_t result = detail::drain(m_okx_market.events());
+            okx_market();
+        }
+
+        for (size_t slot = 0; slot < kEpisodesCapacity; ++slot)
+        {
+            if (event.data.fd == m_okx_episodes_notify[slot])
+            {
+                [[maybe_unused]] const uint64_t result = detail::drain(m_okx_episodes_notify[slot]);
+                okx_episode_response(slot);
+            }
+        }
+
+        if (event.data.fd == m_okx_account.events())
+        {
+            [[maybe_unused]] const uint64_t result = detail::drain(m_okx_account.events());
+            okx_account();
+        }
+
         if (event.data.fd == m_okx_screener.signals())
         {
             [[maybe_unused]] const uint64_t result = detail::drain(m_okx_screener.signals());
             okx_signals();
+        }
+
+        if (event.data.fd == m_tick)
+        {
+            [[maybe_unused]] const uint64_t ticks = detail::drain(m_tick);
+            tick();
         }
 
         if (event.data.fd == m_update)
@@ -203,7 +304,7 @@ void Strategy::update() noexcept
     const nanoseconds elapsed = time::now_monotonic() - m_last_reinstruments;
     const nanoseconds remaining = minutes(kInstrumentsRefreshMinutes) - elapsed;
 
-    if (m_episodes == 0 && remaining <= nanoseconds::zero())
+    if (m_active == 0 && remaining <= nanoseconds::zero())
     {
         const bool refreshed = okx_reinstruments();
         if (refreshed)
@@ -220,9 +321,32 @@ void Strategy::update() noexcept
     }
 }
 
+void Strategy::tick() noexcept
+{
+    const nanoseconds now = time::now_monotonic();
+
+    bool closed = false;
+    for (size_t slot = 0; slot < kEpisodesCapacity; ++slot)
+    {
+        const Episode &episode = m_episodes[slot];
+
+        const bool expired = episode.stage != Stage::Idle && now - episode.opened >= minutes(kEpisodeMinutes);
+        if (expired)
+        {
+            okx_close_episode(slot, "expired");
+            closed = true;
+        }
+    }
+
+    if (closed)
+    {
+        m_log.flush();
+    }
+}
+
 void Strategy::okx_signals() noexcept
 {
-    constexpr int64_t window = static_cast<int64_t>(kSignalMinutes) * 60000;
+    constexpr int64_t window = static_cast<int64_t>(kCascadeMinutes) * 60000;
 
     ScreenerSignal signal{};
     while (m_okx_screener.pop(signal))
@@ -241,19 +365,426 @@ void Strategy::okx_signals() noexcept
             count += static_cast<size_t>(m_signals[index] > since);
         }
 
-        m_log.log("okx signal: instrument = {}, timestamp = {}, impulse = {}, baseline = {}, signals = {}",
-                  instrument, signal.timestamp, signal.impulse, signal.baseline, count);
+        m_log.log("okx signal: instrument = {}, timestamp = {}, close = {}, impulse = {}, baseline = {}, signals = {}",
+                  instrument, signal.timestamp, signal.close, signal.impulse, signal.baseline, count);
 
-        if (count > kSignalThreshold)
+        if (count > kCascadeSignals)
         {
             m_okx_screener.cooldown();
             m_signals_head = 0;
 
-            m_log.log<logging::LogLevel::Warning>("okx cooldown requested: signals = {}, minutes = {}", count, kSignalMinutes);
+            m_log.log<logging::LogLevel::Warning>("okx cascade detected: signals = {}, minutes = {}, active episodes = {}", count, kCascadeMinutes, m_active);
+
+            for (size_t slot = 0; slot < kEpisodesCapacity; ++slot)
+            {
+                okx_close_episode(slot, "cascade");
+            }
+
+            continue;
         }
+
+        okx_open_episode(signal);
     }
 
     m_log.flush();
+}
+
+void Strategy::okx_market() noexcept
+{
+    MarketEvent event{};
+    while (m_okx_market.pop(event))
+    {
+        const Episode &episode = m_episodes[event.slot];
+
+        const bool current = episode.stage != Stage::Idle && episode.id == event.episode;
+        if (!current)
+        {
+            continue;
+        }
+
+        if (event.type == MarketEventType::Failure)
+        {
+            okx_close_episode(event.slot, "market");
+            continue;
+        }
+
+        okx_episode_bar(event.slot, event.bar);
+    }
+
+    m_log.flush();
+}
+
+void Strategy::okx_account() noexcept
+{
+    AccountEvent event{};
+    while (m_okx_account.pop(event))
+    {
+        if (!event.connected)
+        {
+            m_balance_at = nanoseconds::zero();
+            continue;
+        }
+
+        m_balance = event.balance;
+        m_balance_at = time::now_monotonic();
+    }
+}
+
+void Strategy::okx_open_episode(const ScreenerSignal &signal) noexcept
+{
+    const std::string_view id(signal.instrument);
+
+    if (!m_okx_market.ready()) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx episode rejected: market clock is not ready, instrument = {}", id);
+        return;
+    }
+
+    size_t slot = 0;
+    for (; slot < kEpisodesCapacity; ++slot)
+    {
+        const Episode &episode = m_episodes[slot];
+
+        const bool free = episode.stage == Stage::Idle && !episode.pending;
+        if (free)
+        {
+            break;
+        }
+    }
+
+    if (slot == kEpisodesCapacity)
+    {
+        m_log.log<logging::LogLevel::Warning>("okx episode rejected: no free slot, instrument = {}", id);
+        return;
+    }
+
+    const size_t index = find_instrument(id);
+    if (index == m_instruments_size) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx episode rejected: unknown instrument = {}", id);
+        return;
+    }
+
+    const Instrument &instrument = m_instruments[index];
+
+    const Fee *const fee = find_fee(instrument.fee_group);
+    if (fee == nullptr) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx episode rejected: unknown fee group = {}, instrument = {}", instrument.fee_group, id);
+        return;
+    }
+
+    const nanoseconds now = time::now_monotonic();
+
+    const nanoseconds age = now - m_balance_at;
+    if (age > milliseconds(kBalanceMilliseconds)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx episode rejected: balance is stale, age = {} ms, instrument = {}", detail::ms(age), id);
+        return;
+    }
+
+    const double capital = m_balance.equity - m_balance.isolated_pnl;
+
+    double reserved = 0.0;
+    for (const Episode &other : m_episodes)
+    {
+        reserved += other.stage != Stage::Idle ? other.budget : 0.0;
+    }
+
+    const double share = capital / static_cast<double>(kEpisodesCapacity);
+    const double budget = std::min({ share, capital - reserved, m_balance.available });
+    const double commission = std::max(0.0, -fee->taker);
+
+    MinimumOrder order{};
+    std::string_view rejection;
+
+    const bool tradable = detail::fit_minimum_order(instrument, std::span<const Tier>(), budget, signal.close, commission,
+                                                    static_cast<double>(kLeverage), order, rejection);
+    if (!tradable)
+    {
+        m_log.log<logging::LogLevel::Warning>("okx episode rejected: not tradable, instrument = {}, reason = {}, budget = {}, margin = {}, fees = {}, leverage = {}",
+                                              id, rejection, budget, order.margin, order.fees, order.leverage);
+        return;
+    }
+
+    Episode &episode = m_episodes[slot];
+    episode.id = ++m_opened;
+    episode.instrument = index;
+    episode.opened = now;
+    episode.budget = budget;
+    episode.price = signal.close;
+    episode.fee = commission;
+    episode.leverage = order.leverage;
+    episode.stage = Stage::Tiers;
+
+    m_histories[slot].clear();
+    ++m_active;
+
+    m_log.log("okx episode opened: slot = {}, episode = {}, instrument = {}, price = {}, budget = {}, active = {}",
+              slot, episode.id, id, signal.close, budget, m_active);
+    m_log.log("okx {} contract: value = {}, multiplier = {}, lot = {}, min = {}, max limit = {}, tick = {}",
+              id, instrument.contract_value, instrument.contract_multiplier, instrument.lot_size, instrument.min_size, instrument.max_limit_size, instrument.tick_size);
+
+    const double contract = instrument.contract_value * instrument.contract_multiplier;
+    if (!m_okx_market.subscribe(slot, episode.id, id, contract)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} market subscribe rejected: command queue is full", id);
+        okx_close_episode(slot, "market");
+
+        return;
+    }
+
+    if (!okx_episode_request(slot, Stage::Tiers)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} get position tiers request rejected by http client", id);
+        okx_close_episode(slot, "tiers");
+    }
+}
+
+void Strategy::okx_close_episode(size_t slot, std::string_view reason) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    if (episode.stage == Stage::Idle)
+    {
+        return;
+    }
+
+    const std::string_view id(m_instruments[episode.instrument].id);
+    const nanoseconds lifetime = time::now_monotonic() - episode.opened;
+
+    m_log.log("okx episode closed: slot = {}, episode = {}, instrument = {}, reason = {}, stage = {}, bars = {}, lifetime = {} ms",
+              slot, episode.id, id, reason, stage_name(static_cast<uint8_t>(episode.stage)), m_histories[slot].size(), detail::ms(lifetime));
+
+    if (!m_okx_market.unsubscribe(slot, episode.id)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} market unsubscribe rejected: command queue is full", id);
+    }
+
+    episode.stage = Stage::Idle;
+    episode.budget = 0.0;
+
+    --m_active;
+
+    if (!episode.pending)
+    {
+        m_requests[slot].reset();
+    }
+}
+
+void Strategy::okx_episode_response(size_t slot) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    if (!episode.pending) [[unlikely]]
+    {
+        return;
+    }
+
+    episode.pending = false;
+
+    const network::HttpRequest &request = *m_requests[slot];
+
+    if (episode.stage == Stage::Tiers)
+    {
+        okx_episode_tiers(slot, request);
+    }
+    else if (episode.stage == Stage::LeverageLong || episode.stage == Stage::LeverageShort)
+    {
+        okx_episode_leverage(slot, request);
+    }
+    else
+    {
+        m_requests[slot].reset();
+    }
+
+    m_log.flush();
+}
+
+void Strategy::okx_episode_tiers(size_t slot, const network::HttpRequest &request) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    const Instrument &instrument = m_instruments[episode.instrument];
+    const std::string_view id(instrument.id);
+
+    std::array<Tier, kTiersCapacity> tiers{};
+
+    int code = -1;
+    size_t count = 0;
+
+    bool result = parsing::detail::okx_parse_tiers({ request.buffer, request.size }, code, tiers, count);
+    result = result && request.code == 200 && code == 0 && count != 0;
+
+    if (!result)
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} get position tiers request failed: http = {}, code = {}, tiers = {}", id, request.code, code, count);
+        okx_close_episode(slot, "tiers");
+
+        return;
+    }
+
+    MinimumOrder order{};
+    std::string_view rejection;
+
+    const bool tradable = detail::fit_minimum_order(instrument, std::span(tiers).first(count), episode.budget, episode.price, episode.fee,
+                                                    static_cast<double>(kLeverage), order, rejection);
+    if (!tradable)
+    {
+        m_log.log<logging::LogLevel::Warning>("okx {} not tradable: reason = {}, budget = {}, margin = {}, fees = {}, leverage = {}",
+                                              id, rejection, episode.budget, order.margin, order.fees, order.leverage);
+        okx_close_episode(slot, "not tradable");
+
+        return;
+    }
+
+    episode.leverage = order.leverage;
+
+    m_log.log("okx {} minimum order: leverage = {}, size = {}, notional = {}, margin = {}, fees = {}, budget = {}",
+              id, order.leverage, order.size, order.notional, order.margin, order.fees, episode.budget);
+
+    if (!okx_episode_request(slot, Stage::LeverageLong)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} set leverage request rejected by http client", id);
+        okx_close_episode(slot, "leverage");
+    }
+}
+
+void Strategy::okx_episode_leverage(size_t slot, const network::HttpRequest &request) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    const std::string_view id(m_instruments[episode.instrument].id);
+
+    const bool longs = episode.stage == Stage::LeverageLong;
+    const std::string_view side = longs ? "long" : "short";
+
+    int code = -1;
+
+    bool result = parsing::detail::okx_parse_code({ request.buffer, request.size }, code);
+    result = result && request.code == 200 && code == 0;
+
+    if (!result)
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} set leverage {} failed: side = {}, http = {}, code = {}", id, episode.leverage, side, request.code, code);
+        okx_close_episode(slot, "leverage");
+
+        return;
+    }
+
+    if (longs)
+    {
+        if (!okx_episode_request(slot, Stage::LeverageShort)) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Error>("okx {} set leverage request rejected by http client", id);
+            okx_close_episode(slot, "leverage");
+        }
+
+        return;
+    }
+
+    episode.stage = Stage::Warmup;
+    m_requests[slot].reset();
+
+    const nanoseconds elapsed = time::now_monotonic() - episode.opened;
+
+    m_log.log("okx episode prepared: slot = {}, instrument = {}, leverage = {}, bars = {}, elapsed = {} ms",
+              slot, id, episode.leverage, m_histories[slot].size(), detail::ms(elapsed));
+}
+
+void Strategy::okx_episode_bar(size_t slot, const Bar &bar) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    RingBuffer<Bar, kHistoryBars> &history = m_histories[slot];
+
+    const std::string_view id(m_instruments[episode.instrument].id);
+
+    const bool continuous = history.size() == 0 || bar.timestamp == history.back().timestamp + 1000;
+    if (!continuous) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} bars are not continuous: last = {}, timestamp = {}", id, history.back().timestamp, bar.timestamp);
+        okx_close_episode(slot, "bars");
+
+        return;
+    }
+
+    history.push(bar);
+
+    if (history.size() == 1)
+    {
+        m_log.log("okx {} first bar: timestamp = {}, close = {}, bid = {}, ask = {}, volume = {}", id, bar.timestamp, bar.close, bar.bid, bar.ask, bar.volume);
+    }
+
+    const nanoseconds elapsed = time::now_monotonic() - episode.opened;
+
+    const bool warmed = episode.stage == Stage::Warmup && history.full() && elapsed >= minutes(kWarmupMinutes);
+    if (!warmed)
+    {
+        return;
+    }
+
+    episode.stage = Stage::Ready;
+
+    const std::span<const Bar, kHistoryBars> window = history.history();
+
+    double volume = 0.0;
+    for (const Bar &item : window)
+    {
+        volume += item.volume;
+    }
+
+    m_log.log("okx episode ready: slot = {}, instrument = {}, first = {}, last = {}, close = {}, volume = {}, elapsed = {} ms",
+              slot, id, window.front().timestamp, window.back().timestamp, bar.close, volume, detail::ms(elapsed));
+}
+
+bool Strategy::okx_episode_request(size_t slot, Stage stage) noexcept
+{
+    static_assert(kEpisodeRequestCapacity > parsing::json_padding_size);
+
+    Episode &episode = m_episodes[slot];
+    const Instrument &instrument = m_instruments[episode.instrument];
+
+    episode.stage = stage;
+
+    network::HttpRequest &request = m_requests[slot].emplace(m_buffers[slot], kEpisodeRequestCapacity - parsing::json_padding_size, 0, 0, false,
+                                                             m_okx_episodes_notify[slot]);
+
+    bool pushed = false;
+    if (stage == Stage::Tiers)
+    {
+        pushed = m_okx_http_client.get_position_tiers(request, "SWAP", "isolated", instrument.family);
+    }
+    else
+    {
+        const std::string_view side = stage == Stage::LeverageLong ? "long" : "short";
+        pushed = m_okx_http_client.set_leverage(request, instrument.id, episode.leverage, side);
+    }
+
+    episode.pending = pushed;
+
+    return pushed;
+}
+
+size_t Strategy::find_instrument(std::string_view id) const noexcept
+{
+    for (size_t index = 0; index < m_instruments_size; ++index)
+    {
+        if (std::string_view(m_instruments[index].id) == id)
+        {
+            return index;
+        }
+    }
+
+    return m_instruments_size;
+}
+
+const Fee *Strategy::find_fee(int group) const noexcept
+{
+    for (size_t index = 0; index < m_fees_size; ++index)
+    {
+        if (m_fees[index].group == group)
+        {
+            return &m_fees[index];
+        }
+    }
+
+    return nullptr;
 }
 
 bool Strategy::okx_reinstruments() noexcept
@@ -332,6 +863,9 @@ bool Strategy::okx_reinstruments() noexcept
 
     m_log.log("okx instruments refreshed: listed = {}, valid = {}, liquid = {}, elapsed = {} ms", listed, valid, liquid, detail::ms(end - begin));
     m_log.flush();
+
+    std::copy_n(instruments.begin(), listed, m_instruments.begin());
+    m_instruments_size = listed;
 
     result = m_okx_screener.resubscribe(listed_instruments);
     if (!result) [[unlikely]]
@@ -585,7 +1119,7 @@ bool Strategy::okx_get_instruments(network::HttpRequest &request, int &code, mil
     return result && request.code == 200 && code == 0;
 }
 
-bool Strategy::okx_get_balance(network::HttpRequest &request, int &code, std::string_view currency, double &available) noexcept
+bool Strategy::okx_get_balance(network::HttpRequest &request, int &code, std::string_view currency, Balance &balance) noexcept
 {
     code = -1;
     bool result = m_okx_http_client.get_balance(request, currency);
@@ -595,7 +1129,22 @@ bool Strategy::okx_get_balance(network::HttpRequest &request, int &code, std::st
     }
 
     detail::wait(request.notify);
-    result = parsing::detail::okx_parse_balance({ request.buffer, request.size }, code, available, currency);
+    result = parsing::detail::okx_parse_balance({ request.buffer, request.size }, code, currency, balance);
+
+    return result && request.code == 200 && code == 0;
+}
+
+bool Strategy::okx_get_fees(network::HttpRequest &request, int &code, std::span<Fee> fees, size_t &count) noexcept
+{
+    code = -1;
+    bool result = m_okx_http_client.get_trade_fee(request, "SWAP");
+    if (!result)
+    {
+        return false;
+    }
+
+    detail::wait(request.notify);
+    result = parsing::detail::okx_parse_fees({ request.buffer, request.size }, code, fees, count);
 
     return result && request.code == 200 && code == 0;
 }
