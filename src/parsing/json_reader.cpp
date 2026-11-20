@@ -4,6 +4,7 @@
 #include <simdjson.h>
 
 #include <charconv>
+#include <limits>
 
 namespace nlx::parsing::detail
 {
@@ -822,6 +823,24 @@ bool okx_parse_trade(std::string_view &trades, Trade &trade) noexcept
     return parsed;
 }
 
+bool okx_parse_price_limit(std::string_view body, double &buy, double &sell, int64_t &timestamp) noexcept
+{
+    const bool disabled = body.find(R"("enabled":false)") != std::string_view::npos;
+    if (disabled)
+    {
+        buy = std::numeric_limits<double>::infinity();
+        sell = 0.0;
+
+        return find_field(body, R"("ts":")", timestamp);
+    }
+
+    bool parsed = find_field(body, R"("buyLmt":")", buy);
+    parsed = parsed && find_field(body, R"("sellLmt":")", sell);
+    parsed = parsed && find_field(body, R"("ts":")", timestamp);
+
+    return parsed && buy > 0.0 && sell > 0.0;
+}
+
 bool okx_parse_books(std::string_view body, bool &snapshot, std::string_view &asks, std::string_view &bids,
                      int64_t &timestamp, int64_t &sequence, int64_t &previous) noexcept
 {
@@ -898,7 +917,7 @@ bool okx_parse_channel(std::string_view json, std::string_view &channel) noexcep
     return true;
 }
 
-bool okx_parse_account_push(std::string_view json, std::string_view currency, Balance &balance, int64_t &timestamp) noexcept
+bool okx_parse_account_push(std::string_view json, std::string_view currency, Balance &balance) noexcept
 {
     simdjson::dom::array data;
     if (!parse_push(json, data))
@@ -907,12 +926,9 @@ bool okx_parse_account_push(std::string_view json, std::string_view currency, Ba
     }
 
     simdjson::dom::element account;
-    bool parsed = data.at(0).get(account) == simdjson::SUCCESS;
+    const bool parsed = data.at(0).get(account) == simdjson::SUCCESS;
 
-    std::string_view updated;
-    parsed = parsed && read_text(account, "uTime", updated);
-
-    return parsed && to_number(updated, timestamp) && read_balance(account, currency, balance);
+    return parsed && read_balance(account, currency, balance);
 }
 
 bool okx_parse_positions_push(std::string_view json, std::span<Position> positions, size_t &count, bool &snapshot) noexcept

@@ -64,7 +64,6 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_histories(),
     m_requests(),
     m_buffers(),
-    m_backlogs(),
     m_inputs(),
     m_states(),
     m_outputs(),
@@ -532,7 +531,13 @@ void Strategy::okx_account() noexcept
             continue;
         }
 
-        if (event.type == AccountEventType::Flat || (event.type == AccountEventType::Rejected && !event.closing))
+        if (event.type == AccountEventType::Flat)
+        {
+            episode.held = Target::Flat;
+            episode.closing = false;
+        }
+
+        if (event.type == AccountEventType::Rejected && !event.closing)
         {
             episode.held = Target::Flat;
         }
@@ -546,11 +551,6 @@ void Strategy::okx_account() noexcept
             m_log.log<logging::LogLevel::Warning>("okx {} is restricted for this account, episode closed, instrument skipped until the next refresh",
                                                   std::string_view(instrument.id));
             okx_close_episode(event.slot, "restricted");
-        }
-
-        if (event.type == AccountEventType::Flat)
-        {
-            episode.closing = false;
         }
 
         if (event.type == AccountEventType::Filled)
@@ -665,7 +665,6 @@ void Strategy::okx_open_episode(const ScreenerSignal &signal) noexcept
     episode.stage = Stage::Tiers;
 
     m_histories[slot].clear();
-    m_backlogs[slot] = Backlog{};
     std::fill_n(m_states[slot], kModelStateCapacity, 0.0f);
     ++m_active;
 
@@ -714,8 +713,9 @@ void Strategy::okx_close_episode(size_t slot, std::string_view reason) noexcept
     episode.stage = Stage::Idle;
     episode.budget = 0.0;
     episode.target = Target::Flat;
+    episode.queued = 0;
+    episode.skipped = 0;
 
-    m_backlogs[slot] = Backlog{};
     --m_active;
 
     if (executing && !okx_execute(slot, ExecutorCommandType::Release, Target::Flat)) [[unlikely]]
@@ -888,19 +888,10 @@ void Strategy::okx_episode_bar(size_t slot, const Bar &bar) noexcept
 
     m_bar_delay.record(time::now() - milliseconds(bar.timestamp + 1000));
 
-    Backlog &backlog = m_backlogs[slot];
     if (m_model.ready())
     {
-        if (backlog.size == kPendingBars) [[unlikely]]
-        {
-            m_log.log<logging::LogLevel::Warning>("okx {} model backlog is full, the oldest bar is skipped", id);
-
-            backlog.head = (backlog.head + 1) % kPendingBars;
-            --backlog.size;
-        }
-
-        backlog.bars[(backlog.head + backlog.size) % kPendingBars] = bar;
-        ++backlog.size;
+        episode.skipped += episode.queued == kQueuedBars ? 1 : 0;
+        episode.queued = std::min(episode.queued + 1, kQueuedBars);
 
         if (!episode.inferring)
         {
@@ -966,16 +957,13 @@ bool Strategy::okx_episode_request(size_t slot, Stage stage) noexcept
 void Strategy::okx_infer(size_t slot) noexcept
 {
     Episode &episode = m_episodes[slot];
-    Backlog &backlog = m_backlogs[slot];
-
-    if (backlog.size == 0 || episode.inferring)
+    if (episode.queued == 0 || episode.inferring)
     {
         return;
     }
 
-    const Bar &bar = backlog.bars[backlog.head];
-    backlog.head = (backlog.head + 1) % kPendingBars;
-    --backlog.size;
+    const Bar &bar = m_histories[slot].history()[kHistoryBars - episode.queued];
+    --episode.queued;
 
     const std::array<double, 7> fields = { bar.open, bar.high, bar.low, bar.close, bar.volume, bar.bid, bar.ask };
 
@@ -1009,13 +997,20 @@ void Strategy::okx_inferred(size_t slot) noexcept
     episode.inferring = false;
     m_model_trip.record(time::now_monotonic() - episode.submitted);
 
+    if (episode.skipped != 0) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx {} bars came in a burst, the model skipped the oldest: skipped = {}, kept = {}",
+                                              std::string_view(m_instruments[episode.instrument].id), episode.skipped, kQueuedBars);
+        episode.skipped = 0;
+    }
+
     if (episode.stage == Stage::Idle)
     {
-        m_backlogs[slot] = Backlog{};
+        episode.queued = 0;
         return;
     }
 
-    if (episode.stage == Stage::Ready && m_backlogs[slot].size == 0)
+    if (episode.stage == Stage::Ready && episode.queued == 0)
     {
         okx_decide(slot);
     }
@@ -1051,39 +1046,31 @@ void Strategy::okx_decide(size_t slot) noexcept
     }
 
     const bool settled = episode.acted == nanoseconds::zero() || now - episode.acted >= seconds(kDecisionSeconds);
-    if (!settled)
+    if (!settled || episode.closing)
     {
         return;
     }
 
-    const milliseconds closed(m_histories[slot].back().timestamp + 1000);
+    const bool reverse = episode.held != Target::Flat && episode.held != target;
+    const bool enter = episode.held == Target::Flat && target != Target::Flat;
 
-    if (episode.closing)
+    if (!reverse && !enter)
     {
         return;
     }
 
-    if (episode.held != Target::Flat && episode.held != target)
-    {
-        if (okx_execute(slot, ExecutorCommandType::Close, episode.held))
-        {
-            episode.closing = true;
-            episode.acted = now;
-            m_decision_delay.record(time::now() - closed);
-        }
+    episode.acted = now;
 
+    const ExecutorCommandType type = reverse ? ExecutorCommandType::Close : ExecutorCommandType::Open;
+    if (!okx_execute(slot, type, reverse ? episode.held : target))
+    {
         return;
     }
 
-    if (episode.held == Target::Flat && target != Target::Flat)
-    {
-        if (okx_execute(slot, ExecutorCommandType::Open, target))
-        {
-            episode.held = target;
-            episode.acted = now;
-            m_decision_delay.record(time::now() - closed);
-        }
-    }
+    episode.closing = reverse;
+    episode.held = reverse ? episode.held : target;
+
+    m_decision_delay.record(time::now() - milliseconds(m_histories[slot].back().timestamp + 1000));
 }
 
 bool Strategy::okx_execute(size_t slot, ExecutorCommandType type, Target target) noexcept
@@ -1103,6 +1090,22 @@ bool Strategy::okx_execute(size_t slot, ExecutorCommandType type, Target target)
     command.order = OrderType::Market;
     command.size = episode.size;
     command.submitted = time::now_monotonic();
+
+    if (type == ExecutorCommandType::Open)
+    {
+        const Bar &bar = m_histories[slot].back();
+
+        const bool limited = bar.buy_limit > 0.0 && bar.sell_limit > 0.0;
+        const bool inside = bar.bid >= bar.sell_limit && bar.ask <= bar.buy_limit;
+
+        if (!limited || !inside)
+        {
+            m_log.log<logging::LogLevel::Warning>("okx {} open skipped: book is outside the exchange price limits, the position could not be closed, "
+                                                  "bid = {}, ask = {}, sell limit = {}, buy limit = {}",
+                                                  std::string_view(instrument.id), bar.bid, bar.ask, bar.sell_limit, bar.buy_limit);
+            return false;
+        }
+    }
 
     if (!m_okx_account.submit(command)) [[unlikely]]
     {

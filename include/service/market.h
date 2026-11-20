@@ -83,6 +83,8 @@ private:
         Bar bar;
         double bid;
         double ask;
+        double buy_limit;
+        double sell_limit;
 
         int64_t first;
         size_t bars;

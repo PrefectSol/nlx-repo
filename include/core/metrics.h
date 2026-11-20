@@ -20,7 +20,6 @@ public:
 
     [[nodiscard]] size_t count() const noexcept;
     [[nodiscard]] double percentile(double quantile) const noexcept;
-    [[nodiscard]] double mean() const noexcept;
     [[nodiscard]] double max() const noexcept;
 
 private:
@@ -30,7 +29,6 @@ private:
     std::array<uint64_t, kBuckets> m_buckets;
 
     uint64_t m_count;
-    uint64_t m_sum;
     uint64_t m_max;
 };
 

@@ -81,7 +81,7 @@ bool OkxMarketStreamer::subscribe(size_t slot, std::string_view instrument) noex
         book.ready = false;
     }
 
-    if (!request("subscribe", instrument, !shared, true))
+    if (!request("subscribe", instrument, !shared, true, true))
     {
         return false;
     }
@@ -129,7 +129,7 @@ void OkxMarketStreamer::unsubscribe(size_t slot) noexcept
         return;
     }
 
-    [[maybe_unused]] const bool sent = request("unsubscribe", book.id, !shared, true);
+    [[maybe_unused]] const bool sent = request("unsubscribe", book.id, !shared, true, true);
 }
 
 bool OkxMarketStreamer::poll(MarketUpdate &update) noexcept
@@ -187,6 +187,16 @@ bool OkxMarketStreamer::poll(MarketUpdate &update) noexcept
         if (channel == "books")
         {
             if (apply(index, body, update)) [[likely]]
+            {
+                return true;
+            }
+
+            continue;
+        }
+
+        if (channel == "price-limit")
+        {
+            if (limit(index, body, update))
             {
                 return true;
             }
@@ -365,7 +375,7 @@ bool OkxMarketStreamer::connect() noexcept
         return false;
     }
 
-    return request("subscribe", kClock, true, false);
+    return request("subscribe", kClock, true, false, false);
 }
 
 void OkxMarketStreamer::drop() noexcept
@@ -391,7 +401,7 @@ void OkxMarketStreamer::drop() noexcept
     m_trades = std::string_view();
 }
 
-bool OkxMarketStreamer::request(std::string_view operation, std::string_view instrument, bool books, bool trades) noexcept
+bool OkxMarketStreamer::request(std::string_view operation, std::string_view instrument, bool books, bool limits, bool trades) noexcept
 {
     const std::span<char> output = m_client.output();
 
@@ -399,20 +409,23 @@ bool OkxMarketStreamer::request(std::string_view operation, std::string_view ins
     char *const end = data + output.size();
 
     char *out = std::format_to_n(data, end - data, R"({{"op":"{}","args":[)", operation).out;
+    std::string_view separator;
 
     if (books)
     {
-        out = std::format_to_n(out, end - out, R"({{"channel":"books","instId":"{}"}})", instrument).out;
+        out = std::format_to_n(out, end - out, R"({}{{"channel":"books","instId":"{}"}})", separator, instrument).out;
+        separator = ",";
     }
 
-    if (books && trades)
+    if (limits)
     {
-        *out++ = ',';
+        out = std::format_to_n(out, end - out, R"({}{{"channel":"price-limit","instId":"{}"}})", separator, instrument).out;
+        separator = ",";
     }
 
     if (trades)
     {
-        out = std::format_to_n(out, end - out, R"({{"channel":"trades","instId":"{}"}})", instrument).out;
+        out = std::format_to_n(out, end - out, R"({}{{"channel":"trades","instId":"{}"}})", separator, instrument).out;
     }
 
     out = std::format_to_n(out, end - out, "]}}").out;
@@ -468,6 +481,29 @@ bool OkxMarketStreamer::next_trade(MarketUpdate &update) noexcept
     }
 
     update = MarketUpdate{ MarketUpdateType::Trade, m_trades_slot, trade.timestamp, trade.price, trade.size };
+
+    return true;
+}
+
+bool OkxMarketStreamer::limit(size_t index, std::string_view body, MarketUpdate &update) noexcept
+{
+    const Book &book = m_books[index];
+    if (book.slot == kSlotsCapacity) [[unlikely]]
+    {
+        return false;
+    }
+
+    double buy = 0.0;
+    double sell = 0.0;
+    int64_t timestamp = 0;
+
+    if (!parsing::detail::okx_parse_price_limit(body, buy, sell, timestamp)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx market streamer price limit parse failed: instrument = {}, body = {}", std::string_view(book.id), body);
+        return false;
+    }
+
+    update = MarketUpdate{ MarketUpdateType::Limit, book.slot, timestamp, buy, sell };
 
     return true;
 }
@@ -591,8 +627,8 @@ void OkxMarketStreamer::resync(size_t index) noexcept
         return;
     }
 
-    const bool unsubscribed = request("unsubscribe", kClock, true, false);
-    [[maybe_unused]] const bool subscribed = unsubscribed && request("subscribe", kClock, true, false);
+    const bool unsubscribed = request("unsubscribe", kClock, true, false, false);
+    [[maybe_unused]] const bool subscribed = unsubscribed && request("subscribe", kClock, true, false, false);
 }
 
 void OkxMarketStreamer::dispatch(std::string_view text) noexcept

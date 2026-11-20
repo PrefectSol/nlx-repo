@@ -90,12 +90,15 @@ struct Bar
     double volume;
     double bid;
     double ask;
+    double buy_limit;
+    double sell_limit;
 };
 
 enum class MarketUpdateType : uint8_t
 {
     Trade,
     Book,
+    Limit,
     Clock,
     Failure
 };

@@ -95,11 +95,12 @@ private:
     bool connect() noexcept;
     void drop() noexcept;
 
-    bool request(std::string_view operation, std::string_view instrument, bool books, bool trades) noexcept;
+    bool request(std::string_view operation, std::string_view instrument, bool books, bool limits, bool trades) noexcept;
     bool send(size_t size) noexcept;
     bool read(std::string_view &text) noexcept;
 
     bool next_trade(MarketUpdate &update) noexcept;
+    bool limit(size_t index, std::string_view body, MarketUpdate &update) noexcept;
     bool apply(size_t index, std::string_view body, MarketUpdate &update) noexcept;
     bool apply_levels(OrderBook &book, std::string_view levels, bool bids) noexcept;
     void resync(size_t index) noexcept;

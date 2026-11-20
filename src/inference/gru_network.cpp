@@ -16,7 +16,6 @@ namespace
 constexpr size_t kLanes = 8;
 constexpr size_t kAlignment = 64;
 constexpr size_t kRegion = kAlignment / sizeof(float);
-constexpr size_t kHeaderFields = 5;
 
 constexpr uint32_t kIdentity = 0;
 constexpr uint32_t kRelu = 1;
@@ -116,10 +115,8 @@ __attribute__((target("avx2,fma"))) inline __m256 sigmoid8(__m256 value) noexcep
 
 __attribute__((target("avx2,fma"))) inline __m256 tanh8(__m256 value) noexcept
 {
-    const __m256 doubled = _mm256_add_ps(value, value);
-    const __m256 one = _mm256_set1_ps(1.0f);
-
-    return _mm256_sub_ps(_mm256_add_ps(sigmoid8(doubled), sigmoid8(doubled)), one);
+    const __m256 squashed = sigmoid8(_mm256_add_ps(value, value));
+    return _mm256_sub_ps(_mm256_add_ps(squashed, squashed), _mm256_set1_ps(1.0f));
 }
 
 __attribute__((target("avx2,fma"))) inline __m256 activate8(__m256 value, uint32_t activation) noexcept
@@ -183,7 +180,7 @@ bool GruNetwork::load(std::span<const std::byte> model, std::string_view &error)
 
     reader.offset = 4;
 
-    std::array<uint32_t, kHeaderFields> header{};
+    std::array<uint32_t, 5> header{};
     for (uint32_t &field : header)
     {
         if (!reader.word(field))

@@ -37,12 +37,13 @@ namespace detail
 [[nodiscard]] bool okx_parse_market_head(std::string_view json, std::string_view &channel, std::string_view &instrument, std::string_view &body) noexcept;
 [[nodiscard]] bool okx_parse_trades(std::string_view body, std::string_view &trades) noexcept;
 [[nodiscard]] bool okx_parse_trade(std::string_view &trades, Trade &trade) noexcept;
+[[nodiscard]] bool okx_parse_price_limit(std::string_view body, double &buy, double &sell, int64_t &timestamp) noexcept;
 [[nodiscard]] bool okx_parse_books(std::string_view body, bool &snapshot, std::string_view &asks, std::string_view &bids,
                                    int64_t &timestamp, int64_t &sequence, int64_t &previous) noexcept;
 [[nodiscard]] bool okx_parse_level(std::string_view &levels, Level &level) noexcept;
 
 [[nodiscard]] bool okx_parse_channel(std::string_view json, std::string_view &channel) noexcept;
-[[nodiscard]] bool okx_parse_account_push(std::string_view json, std::string_view currency, Balance &balance, int64_t &timestamp) noexcept;
+[[nodiscard]] bool okx_parse_account_push(std::string_view json, std::string_view currency, Balance &balance) noexcept;
 [[nodiscard]] bool okx_parse_positions_push(std::string_view json, std::span<Position> positions, size_t &count, bool &snapshot) noexcept;
 [[nodiscard]] bool okx_parse_orders_push(std::string_view json, std::span<Order> orders, size_t &count) noexcept;
 [[nodiscard]] bool okx_parse_reply(std::string_view json, OrderReply &reply) noexcept;

@@ -78,6 +78,7 @@ Executor<Streamer>::Executor(Streamer &streamer, logging::LoggerNode &log, uint3
     m_seats(),
     m_events(),
     m_known_size(0),
+    m_known_next(0),
     m_events_head(0),
     m_events_tail(0),
     m_tag(tag),
@@ -136,17 +137,19 @@ void Executor<Streamer>::open(const ExecutorCommand &command, nanoseconds now) n
         seat.episode = command.episode;
         seat.code = command.code;
         seat.lot = command.lot;
-        seat.tick = command.tick;
         seat.activity = now;
         seat.bound = true;
     }
 
-    if (find_known(instrument) == nullptr && m_known_size < kKnownCapacity)
+    if (find_known(instrument) == nullptr)
     {
-        Known &known = m_known[m_known_size++];
+        Known &known = m_known[m_known_next];
         nlx::detail::str_assign(known.instrument, instrument);
         known.code = command.code;
         known.lot = command.lot;
+
+        m_known_next = (m_known_next + 1) % kKnownCapacity;
+        m_known_size = std::min(m_known_size + 1, kKnownCapacity);
     }
 
     const bool buy = command.side == PositionSide::Long;
@@ -338,10 +341,7 @@ void Executor<Streamer>::positions(std::span<const Position> positions, bool sna
 {
     if (snapshot)
     {
-        for (Holding &holding : m_holdings)
-        {
-            holding.size = 0.0;
-        }
+        m_holdings.fill(Holding{});
     }
 
     for (const Position &position : positions)
@@ -376,9 +376,16 @@ void Executor<Streamer>::positions(std::span<const Position> positions, bool sna
             continue;
         }
 
+        const double size = std::abs(position.size);
+        if (size <= 0.0)
+        {
+            *holding = Holding{};
+            continue;
+        }
+
         nlx::detail::str_assign(holding->instrument, std::string_view(position.instrument));
         holding->side = direction;
-        holding->size = std::abs(position.size);
+        holding->size = size;
         holding->price = position.price;
         holding->used = true;
     }
@@ -667,7 +674,7 @@ void Executor<Streamer>::flatten(size_t slot, nanoseconds now) noexcept
         const bool open = amount > seat.lot / 2.0 && !working(slot, side, true);
         if (open)
         {
-            [[maybe_unused]] const bool sent = liquidate(slot, seat.instrument, seat.code, seat.lot, side, amount, now);
+            liquidate(slot, seat.instrument, seat.code, seat.lot, side, amount, now);
         }
     }
 }
@@ -675,7 +682,7 @@ void Executor<Streamer>::flatten(size_t slot, nanoseconds now) noexcept
 template<typename Streamer>
 void Executor<Streamer>::sweep(nanoseconds now) noexcept
 {
-    for (const Holding &holding : m_holdings)
+    for (Holding &holding : m_holdings)
     {
         if (!holding.used || holding.size <= 0.0)
         {
@@ -705,14 +712,19 @@ void Executor<Streamer>::sweep(nanoseconds now) noexcept
         }
 
         const Known *const known = find_known(holding.instrument);
-        if (known == nullptr)
+        if (known == nullptr && !holding.reported)
         {
             m_log.log<logging::LogLevel::Error>("okx executor unmanaged position, close it by hand: instrument = {}, side = {}, size = {}",
                                                 std::string_view(holding.instrument), side_name(holding.side), holding.size);
+            holding.reported = true;
+        }
+
+        if (known == nullptr)
+        {
             continue;
         }
 
-        [[maybe_unused]] const bool sent = liquidate(kNone, holding.instrument, known->code, known->lot, holding.side, holding.size, now);
+        liquidate(kNone, holding.instrument, known->code, known->lot, holding.side, holding.size, now);
     }
 
     for (Ticket &ticket : m_tickets)
@@ -777,7 +789,7 @@ void Executor<Streamer>::settle(size_t slot, nanoseconds now) noexcept
 }
 
 template<typename Streamer>
-bool Executor<Streamer>::liquidate(size_t slot, const char *instrument, int64_t code, double lot, PositionSide side, double amount, nanoseconds now) noexcept
+void Executor<Streamer>::liquidate(size_t slot, const char *instrument, int64_t code, double lot, PositionSide side, double amount, nanoseconds now) noexcept
 {
     OrderTicket ticket{};
     ticket.instrument = code;
@@ -789,7 +801,7 @@ bool Executor<Streamer>::liquidate(size_t slot, const char *instrument, int64_t 
     if (target == nullptr) [[unlikely]]
     {
         m_log.log<logging::LogLevel::Error>("okx executor close not prepared: slot = {}, instrument = {}, amount = {}", slot, std::string_view(instrument), amount);
-        return false;
+        return;
     }
 
     const uint64_t episode = slot != kNone ? m_seats[slot].episode : 0;
@@ -809,16 +821,16 @@ bool Executor<Streamer>::liquidate(size_t slot, const char *instrument, int64_t 
     target->closing = true;
     target->used = true;
 
-    if (!m_streamer.place(ticket))
+    if (!m_streamer.place(ticket)) [[unlikely]]
     {
+        m_log.log<logging::LogLevel::Warning>("okx executor close not sent, retrying later: slot = {}, client = {}", slot, std::string_view(ticket.client));
+
         *target = Ticket{};
-        return false;
+        return;
     }
 
     m_log.log("okx executor close sent: slot = {}, client = {}, instrument = {}, side = {}, size = {}",
               slot, std::string_view(ticket.client), std::string_view(instrument), side_name(side), std::string_view(ticket.size));
-
-    return true;
 }
 
 template<typename Streamer>
@@ -935,7 +947,7 @@ void Executor<Streamer>::emit(AccountEventType type, size_t slot, uint64_t episo
         return;
     }
 
-    m_events[m_events_tail % kEventsCapacity] = AccountEvent{ type, slot, episode, Balance{}, 0, size, price, code, side, closing };
+    m_events[m_events_tail % kEventsCapacity] = AccountEvent{ type, slot, episode, Balance{}, size, price, code, side, closing };
     ++m_events_tail;
 }
 

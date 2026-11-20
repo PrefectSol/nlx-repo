@@ -259,6 +259,15 @@ void Market<Streamer>::receive() noexcept
             continue;
         }
 
+        if (update.type == MarketUpdateType::Limit)
+        {
+            Slot &limited = m_slots[update.slot];
+            limited.buy_limit = update.price;
+            limited.sell_limit = update.size;
+
+            continue;
+        }
+
         ++m_updates;
         m_delivery.record(time::now() - milliseconds(update.timestamp));
 
@@ -327,6 +336,8 @@ void Market<Streamer>::open(const Command &command) noexcept
     slot.bar = Bar{};
     slot.bid = 0.0;
     slot.ask = 0.0;
+    slot.buy_limit = 0.0;
+    slot.sell_limit = 0.0;
     slot.first = 0;
     slot.bars = 0;
     slot.late = 0;
@@ -437,6 +448,8 @@ void Market<Streamer>::finish(int64_t second) noexcept
         bar.timestamp = second * 1000;
         bar.bid = slot.bid;
         bar.ask = slot.ask;
+        bar.buy_limit = slot.buy_limit;
+        bar.sell_limit = slot.sell_limit;
 
         emit(MarketEventType::Bar, index);
 

@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace nlx::service
 {
@@ -53,7 +54,6 @@ struct AccountEvent
     size_t slot;
     uint64_t episode;
     Balance balance;
-    int64_t timestamp;
     double size;
     double price;
     int code;
@@ -122,6 +122,7 @@ private:
         double size;
         double price;
         PositionSide side;
+        bool reported;
         bool used;
     };
 
@@ -138,7 +139,6 @@ private:
         uint64_t episode;
         int64_t code;
         double lot;
-        double tick;
         std::array<double, 2> exposure;
         nanoseconds flattened;
         nanoseconds activity;
@@ -158,6 +158,7 @@ private:
     std::array<AccountEvent, kEventsCapacity> m_events;
 
     size_t m_known_size;
+    size_t m_known_next;
     size_t m_events_head;
     size_t m_events_tail;
 
@@ -178,7 +179,7 @@ private:
     void flatten(size_t slot, nanoseconds now) noexcept;
     void sweep(nanoseconds now) noexcept;
     void settle(size_t slot, nanoseconds now) noexcept;
-    bool liquidate(size_t slot, const char *instrument, int64_t code, double lot, PositionSide side, double amount, nanoseconds now) noexcept;
+    void liquidate(size_t slot, const char *instrument, int64_t code, double lot, PositionSide side, double amount, nanoseconds now) noexcept;
     void withdraw(Ticket &ticket, nanoseconds now) noexcept;
 
     Ticket *allocate() noexcept;

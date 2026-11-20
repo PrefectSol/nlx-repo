@@ -42,7 +42,6 @@ constexpr uint64_t upper(size_t index, size_t sub) noexcept
 LatencyHistogram::LatencyHistogram() noexcept :
     m_buckets(),
     m_count(0),
-    m_sum(0),
     m_max(0)
 {
 
@@ -55,7 +54,6 @@ void LatencyHistogram::record(nanoseconds value) noexcept
 
     ++m_buckets[index];
     ++m_count;
-    m_sum += ticks;
     m_max = std::max(m_max, ticks);
 }
 
@@ -63,7 +61,6 @@ void LatencyHistogram::reset() noexcept
 {
     m_buckets.fill(0);
     m_count = 0;
-    m_sum = 0;
     m_max = 0;
 }
 
@@ -92,11 +89,6 @@ double LatencyHistogram::percentile(double quantile) const noexcept
     }
 
     return static_cast<double>(m_max) / 1000.0;
-}
-
-double LatencyHistogram::mean() const noexcept
-{
-    return m_count != 0 ? static_cast<double>(m_sum) / static_cast<double>(m_count) / 1000.0 : 0.0;
 }
 
 double LatencyHistogram::max() const noexcept

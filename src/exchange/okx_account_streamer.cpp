@@ -22,7 +22,6 @@ OkxAccountStreamer::OkxAccountStreamer(const Credentials &credentials, OkxRateLi
     m_passphrase(),
     m_secret(),
     m_balance(),
-    m_timestamp(0),
     m_positions(),
     m_positions_size(0),
     m_snapshot(false),
@@ -129,11 +128,6 @@ bool OkxAccountStreamer::connected() const noexcept
 const Balance &OkxAccountStreamer::balance() const noexcept
 {
     return m_balance;
-}
-
-int64_t OkxAccountStreamer::timestamp() const noexcept
-{
-    return m_timestamp;
 }
 
 std::span<const Position> OkxAccountStreamer::positions() const noexcept
@@ -427,7 +421,7 @@ bool OkxAccountStreamer::extract(std::string_view text, AccountUpdateType &type)
 
     if (channel == "account")
     {
-        const bool parsed = parsing::detail::okx_parse_account_push(text, kCurrency, m_balance, m_timestamp);
+        const bool parsed = parsing::detail::okx_parse_account_push(text, kCurrency, m_balance);
         if (!parsed) [[unlikely]]
         {
             m_log.log<logging::LogLevel::Error>("okx account streamer account parse failed: {}", text);

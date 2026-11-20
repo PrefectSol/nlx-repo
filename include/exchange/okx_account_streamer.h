@@ -42,7 +42,6 @@ public:
     [[nodiscard]] bool connected() const noexcept;
 
     [[nodiscard]] const Balance &balance() const noexcept;
-    [[nodiscard]] int64_t timestamp() const noexcept;
     [[nodiscard]] std::span<const Position> positions() const noexcept;
     [[nodiscard]] bool snapshot() const noexcept;
     [[nodiscard]] std::span<const Order> orders() const noexcept;
@@ -72,7 +71,6 @@ private:
     char m_secret[Credentials::kApiFieldCapacity];
 
     Balance m_balance;
-    int64_t m_timestamp;
 
     std::array<Position, kPositionsCapacity> m_positions;
     size_t m_positions_size;

@@ -283,7 +283,6 @@ void Account<Streamer>::balance() noexcept
     AccountEvent event{};
     event.type = AccountEventType::Balance;
     event.balance = balance;
-    event.timestamp = m_streamer.timestamp();
 
     emit(event);
 }

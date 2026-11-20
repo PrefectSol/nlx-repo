@@ -70,7 +70,7 @@ private:
 
     static constexpr size_t kRetryMilliseconds = 1000;
     static constexpr size_t kDecisionSeconds = 15;
-    static constexpr size_t kPendingBars = 8;
+    static constexpr size_t kQueuedBars = 8;
     static constexpr size_t kModelInputCapacity = 256;
     static constexpr size_t kModelStateCapacity = 16384;
     static constexpr size_t kModelOutputCapacity = 64;
@@ -85,6 +85,7 @@ private:
     static_assert(kEpisodesCapacity <= Market<exchange::OkxMarketStreamer>::capacity());
     static_assert(kEpisodesCapacity <= Executor<exchange::OkxAccountStreamer>::kSlotsCapacity);
     static_assert(kWarmupMinutes * 60 >= kHistoryBars);
+    static_assert(kQueuedBars <= kHistoryBars);
 
     enum class Stage : uint8_t
     {
@@ -112,6 +113,8 @@ private:
         nanoseconds acted;
         nanoseconds retry;
         size_t retries;
+        size_t queued;
+        size_t skipped;
         double budget;
         double price;
         double fee;
@@ -124,13 +127,6 @@ private:
         bool inferring;
         bool executing;
         bool closing;
-    };
-
-    struct Backlog
-    {
-        std::array<Bar, kPendingBars> bars;
-        size_t head;
-        size_t size;
     };
 
     logging::LoggerNode m_log;
@@ -170,7 +166,6 @@ private:
     std::array<std::optional<network::HttpRequest>, kEpisodesCapacity> m_requests;
     char m_buffers[kEpisodesCapacity][kEpisodeRequestCapacity];
 
-    std::array<Backlog, kEpisodesCapacity> m_backlogs;
     float m_inputs[kEpisodesCapacity][kModelInputCapacity];
     float m_states[kEpisodesCapacity][kModelStateCapacity];
     float m_outputs[kEpisodesCapacity][kModelOutputCapacity];

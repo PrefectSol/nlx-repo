@@ -4,7 +4,6 @@
 #include <cstring>
 #include <format>
 #include <fstream>
-#include <iterator>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -44,7 +43,7 @@ Model::Model(const Credentials &credentials, logging::LoggerRegistry &registry) 
 
 void Model::initialize()
 {
-    std::ifstream file(kPath, std::ios::binary);
+    std::ifstream file(kPath, std::ios::binary | std::ios::ate);
     if (!file || !m_keyed)
     {
         m_log.log<logging::LogLevel::Warning>("model disabled: file {} present = {}, NLX_MODEL_KEY valid = {}", std::string_view(kPath), static_cast<bool>(file), m_keyed);
@@ -54,13 +53,21 @@ void Model::initialize()
         return;
     }
 
-    const std::vector<char> raw((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::vector<std::byte> sealed(static_cast<size_t>(file.tellg()));
+    file.seekg(0);
 
-    std::vector<std::byte> sealed(raw.size());
-    std::memcpy(sealed.data(), raw.data(), raw.size());
+    const bool loaded = static_cast<bool>(file.read(reinterpret_cast<char *>(sealed.data()), static_cast<std::streamsize>(sealed.size())));
+    if (!loaded)
+    {
+        throw std::runtime_error(std::format("model read failed: {}", std::string_view(kPath)));
+    }
 
     std::vector<std::byte> plain;
-    if (!crypto::open(sealed, m_key, plain))
+    const bool opened = crypto::open(sealed, m_key, plain);
+
+    m_key.fill(0);
+
+    if (!opened)
     {
         throw std::runtime_error("model decryption failed: wrong NLX_MODEL_KEY or damaged model file");
     }
