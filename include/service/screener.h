@@ -3,6 +3,7 @@
 
 #include "core/file_descriptor.h"
 #include "core/market.h"
+#include "core/metrics.h"
 #include "core/ring_buffer.h"
 #include "core/spsc_queue.h"
 #include "exchange/okx_rate_limiter.h"
@@ -41,7 +42,7 @@ public:
     static constexpr double kImpulseThreshold = 0.03;
     static constexpr double kImpulseRatio = 5.0;
 
-    explicit Screener(exchange::OkxRateLimiter &limiter, logging::LoggerRegistry &registry);
+    explicit Screener(exchange::OkxRateLimiter &limiter, const char *url, logging::LoggerRegistry &registry);
 
     Screener(const Screener &) = delete;
     Screener &operator=(const Screener &) = delete;
@@ -104,6 +105,9 @@ private:
     size_t m_gap_index;
     int64_t m_gap_candles;
     size_t m_stale;
+
+    LoopMeter m_loop;
+    LatencyHistogram m_receive;
 
     void update() noexcept;
     void tick() noexcept;

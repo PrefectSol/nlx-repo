@@ -3,6 +3,7 @@
 
 #include "core/file_descriptor.h"
 #include "core/market.h"
+#include "core/metrics.h"
 #include "core/spsc_queue.h"
 #include "core/time.h"
 #include "exchange/okx_rate_limiter.h"
@@ -36,7 +37,7 @@ template<typename Streamer>
 class Market
 {
 public:
-    explicit Market(exchange::OkxRateLimiter &limiter, logging::LoggerRegistry &registry);
+    explicit Market(exchange::OkxRateLimiter &limiter, const char *url, size_t clock_milliseconds, logging::LoggerRegistry &registry);
 
     Market(const Market &) = delete;
     Market &operator=(const Market &) = delete;
@@ -62,6 +63,7 @@ private:
     static constexpr size_t kCommandsCapacity = 16;
     static constexpr size_t kEventsCapacity = 1024;
     static constexpr int64_t kGapSeconds = 60;
+    static constexpr size_t kMetricsTicks = 60;
 
     struct Command
     {
@@ -112,6 +114,13 @@ private:
     std::array<Slot, Streamer::capacity()> m_slots;
 
     int64_t m_second;
+    size_t m_ticks;
+
+    LoopMeter m_loop;
+    LatencyHistogram m_receive;
+    LatencyHistogram m_delivery;
+    LatencyHistogram m_close;
+    size_t m_updates;
 
     void command() noexcept;
     void tick() noexcept;
@@ -128,6 +137,7 @@ private:
     void trade(Slot &slot, const MarketUpdate &update) noexcept;
 
     void emit(MarketEventType type, size_t index) noexcept;
+    void report() noexcept;
 };
 
 template<typename Streamer>

@@ -9,9 +9,9 @@ namespace nlx::service
 {
 
 template<typename Streamer>
-Screener<Streamer>::Screener(exchange::OkxRateLimiter &limiter, logging::LoggerRegistry &registry) :
+Screener<Streamer>::Screener(exchange::OkxRateLimiter &limiter, const char *url, logging::LoggerRegistry &registry) :
     m_log(),
-    m_streamer(limiter, m_log),
+    m_streamer(limiter, url, m_log),
     m_epoll(),
     m_stop(),
     m_update(),
@@ -28,7 +28,9 @@ Screener<Streamer>::Screener(exchange::OkxRateLimiter &limiter, logging::LoggerR
     m_gaps(0),
     m_gap_index(0),
     m_gap_candles(0),
-    m_stale(0)
+    m_stale(0),
+    m_loop(),
+    m_receive()
 {
     m_log = registry.create_node("okx_screener");
 
@@ -66,10 +68,15 @@ void Screener<Streamer>::start() noexcept
     m_log.log("filter impulse: threshold = {}, ratio = {}", kImpulseThreshold, kImpulseRatio);
     m_log.flush();
 
+    m_loop.reset(time::now_monotonic());
+
     epoll_event event{};
     while (true)
     {
+        m_loop.sleep(time::now_monotonic());
         const size_t count = detail::epoll_wait(m_epoll, { &event, 1 }, -1);
+        m_loop.wake(time::now_monotonic());
+
         if (count == 0)
         {
             continue;
@@ -77,7 +84,9 @@ void Screener<Streamer>::start() noexcept
 
         if (event.data.fd == m_streamer.fd()) [[likely]]
         {
+            const nanoseconds begin = time::now_monotonic();
             receive();
+            m_receive.record(time::now_monotonic() - begin);
         }
         else if (event.data.fd == m_timer)
         {
@@ -223,7 +232,14 @@ void Screener<Streamer>::tick() noexcept
         ready += static_cast<size_t>(m_rings[index].full());
     }
 
+    const nanoseconds now = time::now_monotonic();
+
     m_log.log("screener status: instruments = {}, ready = {}, blind = {}", size, ready, size - ready);
+    m_log.log<logging::LogLevel::Metric>("screener metrics: utilization = {} %, wakeups = {}, receive p50 = {} us, p99 = {} us, max = {} us",
+              m_loop.utilization(now), m_loop.wakeups(), m_receive.percentile(0.5), m_receive.percentile(0.99), m_receive.max());
+
+    m_loop.reset(now);
+    m_receive.reset();
 }
 
 template<typename Streamer>

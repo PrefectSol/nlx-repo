@@ -23,6 +23,7 @@ enum class LogLevel : uint8_t
 {
     Debug,
     Info,
+    Metric,
     Warning,
     Error
 };

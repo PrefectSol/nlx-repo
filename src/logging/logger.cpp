@@ -30,6 +30,8 @@ constexpr std::string_view level_nameblock(LogLevel level) noexcept
             return "[DEBUG]  ";
         case LogLevel::Info:
             return "[INFO]   ";
+        case LogLevel::Metric:
+            return "[METRIC] ";
         case LogLevel::Warning:
             return "[WARNING]";
         case LogLevel::Error:

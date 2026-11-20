@@ -16,8 +16,11 @@ public:
     EnvReader &operator=(const EnvReader &) = delete;
 
     [[nodiscard]] std::string_view get(std::string_view key) const;
+    [[nodiscard]] bool contains(std::string_view key) const noexcept;
 
 private:
+    bool find(std::string_view key, std::string_view &value) const noexcept;
+
     static constexpr size_t kFileCapacity = 1024;
 
     char m_data[kFileCapacity];

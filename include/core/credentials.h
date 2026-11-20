@@ -13,6 +13,9 @@ struct Credentials
     char okx_api_key[kApiFieldCapacity];
     char okx_api_secret[kApiFieldCapacity];
     char okx_api_passphrase[kApiFieldCapacity];
+    char model_key[kApiFieldCapacity];
+
+    bool okx_demo;
 
     [[nodiscard]] static Credentials load(const char *path);
 };

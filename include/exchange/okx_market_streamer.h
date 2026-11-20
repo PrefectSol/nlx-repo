@@ -20,7 +20,7 @@ namespace nlx::exchange
 class OkxMarketStreamer
 {
 public:
-    explicit OkxMarketStreamer(OkxRateLimiter &limiter, logging::LoggerNode &log);
+    explicit OkxMarketStreamer(OkxRateLimiter &limiter, const char *url, size_t clock_milliseconds, logging::LoggerNode &log);
 
     OkxMarketStreamer(const OkxMarketStreamer &) = delete;
     OkxMarketStreamer &operator=(const OkxMarketStreamer &) = delete;
@@ -47,14 +47,12 @@ public:
     [[nodiscard]] static constexpr size_t capacity() noexcept;
 
 private:
-    static constexpr char kUrl[] = "wss://ws.okx.com/ws/v5/public";
     static constexpr char kClock[] = "BTC-USDT-SWAP";
 
     static constexpr size_t kSlotsCapacity = 3;
     static constexpr size_t kBooksCapacity = kSlotsCapacity + 1;
     static constexpr size_t kConnectMilliseconds = 5000;
     static constexpr size_t kReadMilliseconds = 1000;
-    static constexpr size_t kClockMilliseconds = 2000;
     static constexpr int64_t kPhaseMilliseconds = 20;
     static constexpr size_t kBackoffMilliseconds = 1000;
     static constexpr size_t kBackoffLimitMilliseconds = 5000;
@@ -71,6 +69,8 @@ private:
 
     logging::LoggerNode &m_log;
     OkxRateLimiter &m_limiter;
+    const char *m_url;
+    size_t m_clock_milliseconds;
 
     FileDescriptor m_epoll;
     network::WebsocketClient m_client;

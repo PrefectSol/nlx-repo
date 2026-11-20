@@ -21,7 +21,7 @@ namespace nlx::exchange
 class OkxAccountStreamer
 {
 public:
-    explicit OkxAccountStreamer(const Credentials &credentials, OkxRateLimiter &limiter, logging::LoggerNode &log);
+    explicit OkxAccountStreamer(const Credentials &credentials, OkxRateLimiter &limiter, const char *url, logging::LoggerNode &log);
 
     OkxAccountStreamer(const OkxAccountStreamer &) = delete;
     OkxAccountStreamer &operator=(const OkxAccountStreamer &) = delete;
@@ -32,6 +32,9 @@ public:
 
     [[nodiscard]] bool poll(AccountUpdateType &type) noexcept;
 
+    [[nodiscard]] bool place(const OrderTicket &ticket) noexcept;
+    [[nodiscard]] bool cancel(int64_t instrument, std::string_view client) noexcept;
+
     void heartbeat() noexcept;
     void close() noexcept;
 
@@ -41,10 +44,11 @@ public:
     [[nodiscard]] const Balance &balance() const noexcept;
     [[nodiscard]] int64_t timestamp() const noexcept;
     [[nodiscard]] std::span<const Position> positions() const noexcept;
+    [[nodiscard]] bool snapshot() const noexcept;
     [[nodiscard]] std::span<const Order> orders() const noexcept;
+    [[nodiscard]] const OrderReply &reply() const noexcept;
 
 private:
-    static constexpr char kUrl[] = "wss://ws.okx.com/ws/v5/private";
     static constexpr char kCurrency[] = "USDT";
 
     static constexpr size_t kPositionsCapacity = 64;
@@ -58,6 +62,7 @@ private:
 
     logging::LoggerNode &m_log;
     OkxRateLimiter &m_limiter;
+    const char *m_url;
 
     FileDescriptor m_epoll;
     network::WebsocketClient m_client;
@@ -71,9 +76,12 @@ private:
 
     std::array<Position, kPositionsCapacity> m_positions;
     size_t m_positions_size;
+    bool m_snapshot;
 
     std::array<Order, kOrdersCapacity> m_orders;
     size_t m_orders_size;
+
+    OrderReply m_reply;
 
     nanoseconds m_received;
     nanoseconds m_pinged_at;

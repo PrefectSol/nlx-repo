@@ -21,7 +21,7 @@ namespace nlx::exchange
 class OkxCandleStreamer
 {
 public:
-    explicit OkxCandleStreamer(OkxRateLimiter &limiter, logging::LoggerNode &log);
+    explicit OkxCandleStreamer(OkxRateLimiter &limiter, const char *url, logging::LoggerNode &log);
 
     OkxCandleStreamer(const OkxCandleStreamer &) = delete;
     OkxCandleStreamer &operator=(const OkxCandleStreamer &) = delete;
@@ -45,7 +45,6 @@ public:
     [[nodiscard]] static constexpr size_t capacity() noexcept;
 
 private:
-    static constexpr char kUrl[] = "wss://ws.okx.com/ws/v5/business";
 
     static constexpr size_t kInstrumentsCapacity = 1024;
     static constexpr size_t kConnectMilliseconds = 5000;
@@ -65,6 +64,7 @@ private:
 
     logging::LoggerNode &m_log;
     OkxRateLimiter &m_limiter;
+    const char *m_url;
 
     FileDescriptor m_epoll;
     network::WebsocketClient m_client;

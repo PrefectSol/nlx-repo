@@ -18,6 +18,8 @@ namespace detail
 {
 
 [[nodiscard]] bool okx_parse_code(std::string_view json, int &code) noexcept;
+[[nodiscard]] std::string_view okx_parse_message(std::string_view json) noexcept;
+[[nodiscard]] bool okx_parse_leverage(std::string_view json, int &code, double &leverage) noexcept;
 [[nodiscard]] bool okx_parse_time(std::string_view json, int &code, milliseconds &time) noexcept;
 [[nodiscard]] bool okx_parse_account_config(std::string_view json, int &code, uint64_t &uid, int &mode, bool &hedge, bool &trade) noexcept;
 [[nodiscard]] bool okx_parse_balance(std::string_view json, int &code, std::string_view currency, Balance &balance) noexcept;
@@ -41,8 +43,9 @@ namespace detail
 
 [[nodiscard]] bool okx_parse_channel(std::string_view json, std::string_view &channel) noexcept;
 [[nodiscard]] bool okx_parse_account_push(std::string_view json, std::string_view currency, Balance &balance, int64_t &timestamp) noexcept;
-[[nodiscard]] bool okx_parse_positions_push(std::string_view json, std::span<Position> positions, size_t &count) noexcept;
+[[nodiscard]] bool okx_parse_positions_push(std::string_view json, std::span<Position> positions, size_t &count, bool &snapshot) noexcept;
 [[nodiscard]] bool okx_parse_orders_push(std::string_view json, std::span<Order> orders, size_t &count) noexcept;
+[[nodiscard]] bool okx_parse_reply(std::string_view json, OrderReply &reply) noexcept;
 
 } // namespace nlx::parsing::detail
 } // namespace nlx::parsing

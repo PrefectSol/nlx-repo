@@ -12,9 +12,10 @@
 namespace nlx::exchange
 {
 
-OkxCandleStreamer::OkxCandleStreamer(OkxRateLimiter &limiter, logging::LoggerNode &log) :
+OkxCandleStreamer::OkxCandleStreamer(OkxRateLimiter &limiter, const char *url, logging::LoggerNode &log) :
     m_log(log),
     m_limiter(limiter),
+    m_url(url),
     m_epoll(),
     m_client(),
     m_slots(),
@@ -321,7 +322,7 @@ bool OkxCandleStreamer::connect() noexcept
     acquire(WebsocketConnect);
 
     const nanoseconds begin = time::now_monotonic();
-    if (!m_client.connect(kUrl, milliseconds(kConnectMilliseconds)))
+    if (!m_client.connect(m_url, milliseconds(kConnectMilliseconds)))
     {
         m_log.log<logging::LogLevel::Error>("okx candle streamer connect failed: {}", m_client.error());
         return false;

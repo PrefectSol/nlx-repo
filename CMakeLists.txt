@@ -57,6 +57,7 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crypto.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file_descriptor.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/metrics.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/order_book.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/system_error.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/thread.cpp"
@@ -74,13 +75,38 @@ set(SV_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/env_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/json_reader.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/account.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/service/executor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/market.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/minimum_order.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/service/model.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/screener.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/service/strategy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/supervisor.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
 )
+
+set(NLX_WARNINGS
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wconversion
+    -Wshadow
+    -Wno-unused-parameter
+    -Wnon-virtual-dtor
+    -Wold-style-cast
+    -Woverloaded-virtual
+    -Wnull-dereference
+    -Wdouble-promotion
+    -Wformat=2
+)
+
+add_library(nlx_inference STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/inference/gru_network.cpp"
+)
+
+target_compile_features(nlx_inference PRIVATE cxx_std_23)
+target_include_directories(nlx_inference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_options(nlx_inference PRIVATE ${NLX_WARNINGS})
 
 add_executable(${PROJECT_NAME} ${SV_SOURCES})
 
@@ -118,22 +144,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     CA_CERT_PATH="certs/cacert.pem"
 )
 
-target_compile_options(${PROJECT_NAME} PRIVATE
-    -Wall
-    -Wextra
-    -Wpedantic
-    -Wconversion
-    -Wshadow
-    -Wno-unused-parameter
-    -Wnon-virtual-dtor
-    -Wold-style-cast
-    -Woverloaded-virtual
-    -Wnull-dereference
-    -Wdouble-promotion
-    -Wformat=2
-)
+target_compile_options(${PROJECT_NAME} PRIVATE ${NLX_WARNINGS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    nlx_inference
     dep_curl
     dep_ssl
     dep_crypto
@@ -147,6 +161,20 @@ cmake_policy(SET CMP0069 NEW)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported)
 if(ipo_supported)
-    set_property(TARGET ${PROJECT_NAME}
+    set_property(TARGET ${PROJECT_NAME} nlx_inference
         PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
+
+add_executable(nlx_seal
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/tools/seal.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/crypto.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/file.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/system_error.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/parsing/env_reader.cpp"
+)
+
+target_compile_features(nlx_seal PRIVATE cxx_std_23)
+target_include_directories(nlx_seal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(nlx_seal SYSTEM PRIVATE "${LIB_DIR}/openssl/include")
+target_compile_options(nlx_seal PRIVATE ${NLX_WARNINGS})
+target_link_libraries(nlx_seal PRIVATE nlx_inference dep_crypto pthread dl)

@@ -21,9 +21,11 @@ constexpr uint32_t bit(size_t slot) noexcept
 
 } // namespace
 
-OkxMarketStreamer::OkxMarketStreamer(OkxRateLimiter &limiter, logging::LoggerNode &log) :
+OkxMarketStreamer::OkxMarketStreamer(OkxRateLimiter &limiter, const char *url, size_t clock_milliseconds, logging::LoggerNode &log) :
     m_log(log),
     m_limiter(limiter),
+    m_url(url),
+    m_clock_milliseconds(clock_milliseconds),
     m_epoll(),
     m_client(),
     m_books(),
@@ -241,7 +243,7 @@ void OkxMarketStreamer::heartbeat() noexcept
     }
 
     const nanoseconds silence = time::now_monotonic() - m_clock_at;
-    if (silence >= milliseconds(kClockMilliseconds)) [[unlikely]]
+    if (silence >= milliseconds(m_clock_milliseconds)) [[unlikely]]
     {
         m_log.log<logging::LogLevel::Warning>("okx market streamer clock lost: silence = {} ms", nlx::detail::ms(silence));
 
@@ -327,7 +329,7 @@ bool OkxMarketStreamer::connect() noexcept
     }
 
     const nanoseconds begin = time::now_monotonic();
-    if (!m_client.connect(kUrl, milliseconds(kConnectMilliseconds)))
+    if (!m_client.connect(m_url, milliseconds(kConnectMilliseconds)))
     {
         m_log.log<logging::LogLevel::Error>("okx market streamer connect failed: {}", m_client.error());
         return false;

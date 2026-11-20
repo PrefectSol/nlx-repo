@@ -3,6 +3,7 @@
 
 #include "core/file_descriptor.h"
 #include "core/market.h"
+#include "core/metrics.h"
 #include "core/ring_buffer.h"
 #include "core/time.h"
 #include "exchange/okx_account_streamer.h"
@@ -15,6 +16,7 @@
 #include "service/account.h"
 #include "service/market.h"
 #include "service/minimum_order.h"
+#include "service/model.h"
 #include "service/screener.h"
 
 #include <array>
@@ -33,7 +35,7 @@ class Strategy
 public:
     explicit Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::OkxCandleStreamer> &okx_screener,
                       Market<exchange::OkxMarketStreamer> &okx_market, Account<exchange::OkxAccountStreamer> &okx_account,
-                      logging::LoggerRegistry &registry);
+                      Model &model, logging::LoggerRegistry &registry);
 
     Strategy(const Strategy &) = delete;
     Strategy &operator=(const Strategy &) = delete;
@@ -66,6 +68,14 @@ private:
     static constexpr size_t kBalanceMilliseconds = 15000;
     static constexpr size_t kEpisodeRequestCapacity = 64 * 1024;
 
+    static constexpr size_t kRetryMilliseconds = 1000;
+    static constexpr size_t kDecisionSeconds = 15;
+    static constexpr size_t kPendingBars = 8;
+    static constexpr size_t kModelInputCapacity = 256;
+    static constexpr size_t kModelStateCapacity = 16384;
+    static constexpr size_t kModelOutputCapacity = 64;
+    static constexpr size_t kMetricsTicks = 60;
+
     static constexpr size_t kFeesCapacity = 16;
     static constexpr size_t kTiersCapacity = 256;
 
@@ -73,6 +83,7 @@ private:
     static constexpr size_t kCandlesCapacity = 16 * 1024;
 
     static_assert(kEpisodesCapacity <= Market<exchange::OkxMarketStreamer>::capacity());
+    static_assert(kEpisodesCapacity <= Executor<exchange::OkxAccountStreamer>::kSlotsCapacity);
     static_assert(kWarmupMinutes * 60 >= kHistoryBars);
 
     enum class Stage : uint8_t
@@ -85,17 +96,41 @@ private:
         Ready
     };
 
+    enum class Target : uint8_t
+    {
+        Flat,
+        Long,
+        Short
+    };
+
     struct Episode
     {
         uint64_t id;
         size_t instrument;
         nanoseconds opened;
+        nanoseconds submitted;
+        nanoseconds acted;
+        nanoseconds retry;
+        size_t retries;
         double budget;
         double price;
         double fee;
         double leverage;
+        double size;
         Stage stage;
+        Target target;
+        Target held;
         bool pending;
+        bool inferring;
+        bool executing;
+        bool closing;
+    };
+
+    struct Backlog
+    {
+        std::array<Bar, kPendingBars> bars;
+        size_t head;
+        size_t size;
     };
 
     logging::LoggerNode m_log;
@@ -103,6 +138,7 @@ private:
     Screener<exchange::OkxCandleStreamer> &m_okx_screener;
     Market<exchange::OkxMarketStreamer> &m_okx_market;
     Account<exchange::OkxAccountStreamer> &m_okx_account;
+    Model &m_model;
 
     FileDescriptor m_epoll;
     FileDescriptor m_stop;
@@ -113,6 +149,7 @@ private:
 
     std::array<FileDescriptor, kCandlesSlots> m_okx_candles_notify;
     std::array<FileDescriptor, kEpisodesCapacity> m_okx_episodes_notify;
+    std::array<FileDescriptor, kEpisodesCapacity> m_model_notify;
 
     std::atomic<bool> m_initialized;
     std::atomic<bool> m_stopping;
@@ -132,6 +169,17 @@ private:
     std::array<RingBuffer<Bar, kHistoryBars>, kEpisodesCapacity> m_histories;
     std::array<std::optional<network::HttpRequest>, kEpisodesCapacity> m_requests;
     char m_buffers[kEpisodesCapacity][kEpisodeRequestCapacity];
+
+    std::array<Backlog, kEpisodesCapacity> m_backlogs;
+    float m_inputs[kEpisodesCapacity][kModelInputCapacity];
+    float m_states[kEpisodesCapacity][kModelStateCapacity];
+    float m_outputs[kEpisodesCapacity][kModelOutputCapacity];
+
+    LoopMeter m_loop;
+    LatencyHistogram m_bar_delay;
+    LatencyHistogram m_model_trip;
+    LatencyHistogram m_decision_delay;
+    size_t m_ticks;
 
     uint64_t m_opened;
     size_t m_active;
@@ -153,6 +201,12 @@ private:
     void okx_episode_leverage(size_t slot, const network::HttpRequest &request) noexcept;
     void okx_episode_bar(size_t slot, const Bar &bar) noexcept;
     bool okx_episode_request(size_t slot, Stage stage) noexcept;
+
+    void okx_infer(size_t slot) noexcept;
+    void okx_inferred(size_t slot) noexcept;
+    void okx_decide(size_t slot) noexcept;
+    bool okx_execute(size_t slot, ExecutorCommandType type, Target target) noexcept;
+    void report() noexcept;
 
     size_t find_instrument(std::string_view id) const noexcept;
     const Fee *find_fee(int group) const noexcept;

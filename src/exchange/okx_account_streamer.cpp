@@ -12,9 +12,10 @@
 namespace nlx::exchange
 {
 
-OkxAccountStreamer::OkxAccountStreamer(const Credentials &credentials, OkxRateLimiter &limiter, logging::LoggerNode &log) :
+OkxAccountStreamer::OkxAccountStreamer(const Credentials &credentials, OkxRateLimiter &limiter, const char *url, logging::LoggerNode &log) :
     m_log(log),
     m_limiter(limiter),
+    m_url(url),
     m_epoll(),
     m_client(),
     m_key(),
@@ -24,8 +25,10 @@ OkxAccountStreamer::OkxAccountStreamer(const Credentials &credentials, OkxRateLi
     m_timestamp(0),
     m_positions(),
     m_positions_size(0),
+    m_snapshot(false),
     m_orders(),
     m_orders_size(0),
+    m_reply(),
     m_received(0),
     m_pinged_at(0),
     m_pinged(false),
@@ -138,9 +141,79 @@ std::span<const Position> OkxAccountStreamer::positions() const noexcept
     return std::span<const Position>(m_positions.data(), m_positions_size);
 }
 
+bool OkxAccountStreamer::snapshot() const noexcept
+{
+    return m_snapshot;
+}
+
 std::span<const Order> OkxAccountStreamer::orders() const noexcept
 {
     return std::span<const Order>(m_orders.data(), m_orders_size);
+}
+
+const OrderReply &OkxAccountStreamer::reply() const noexcept
+{
+    return m_reply;
+}
+
+bool OkxAccountStreamer::place(const OrderTicket &ticket) noexcept
+{
+    if (!m_client.connected()) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx account streamer order rejected: not connected, client = {}", std::string_view(ticket.client));
+        return false;
+    }
+
+    const nanoseconds delay = m_limiter.acquire(WebsocketOrder, time::now_monotonic());
+    if (delay != nanoseconds::zero()) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx account streamer order throttled for {} ms: client = {}", nlx::detail::ms(delay), std::string_view(ticket.client));
+        return false;
+    }
+
+    constexpr std::array<std::string_view, 4> types = { "market", "limit", "post_only", "ioc" };
+
+    const std::string_view side = ticket.buy ? "buy" : "sell";
+    const std::string_view position = ticket.position == PositionSide::Long ? "long" : "short";
+    const std::string_view type = types[static_cast<size_t>(ticket.type)];
+    const std::string_view client(ticket.client);
+
+    const std::span<char> output = m_client.output();
+    char *const data = output.data();
+    char *const end = data + output.size();
+
+    char *out = std::format_to_n(data, end - data, R"({{"id":"{}","op":"order","args":[{{"instIdCode":{},"tdMode":"isolated","side":"{}","posSide":"{}","ordType":"{}","sz":"{}","clOrdId":"{}")",
+                                 client, ticket.instrument, side, position, type, std::string_view(ticket.size), client).out;
+
+    if (ticket.type != OrderType::Market)
+    {
+        out = std::format_to_n(out, end - out, R"(,"px":"{}")", std::string_view(ticket.price)).out;
+    }
+
+    out = std::format_to_n(out, end - out, "}}]}}").out;
+
+    return send(static_cast<size_t>(out - data));
+}
+
+bool OkxAccountStreamer::cancel(int64_t instrument, std::string_view client) noexcept
+{
+    if (!m_client.connected()) [[unlikely]]
+    {
+        return false;
+    }
+
+    const nanoseconds delay = m_limiter.acquire(WebsocketCancel, time::now_monotonic());
+    if (delay != nanoseconds::zero()) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx account streamer cancel throttled for {} ms: client = {}", nlx::detail::ms(delay), client);
+        return false;
+    }
+
+    const std::span<char> output = m_client.output();
+    const auto request = std::format_to_n(output.data(), static_cast<uint32_t>(output.size()),
+                                          R"({{"id":"c{}","op":"cancel-order","args":[{{"instIdCode":{},"clOrdId":"{}"}}]}})", client, instrument, client);
+
+    return send(static_cast<size_t>(request.size));
 }
 
 bool OkxAccountStreamer::reconnect() noexcept
@@ -167,7 +240,7 @@ bool OkxAccountStreamer::connect() noexcept
     acquire(WebsocketConnect);
 
     const nanoseconds begin = time::now_monotonic();
-    if (!m_client.connect(kUrl, milliseconds(kConnectMilliseconds)))
+    if (!m_client.connect(m_url, milliseconds(kConnectMilliseconds)))
     {
         m_log.log<logging::LogLevel::Error>("okx account streamer connect failed: {}", m_client.error());
         return false;
@@ -332,6 +405,19 @@ bool OkxAccountStreamer::read(std::string_view &text) noexcept
 
 bool OkxAccountStreamer::extract(std::string_view text, AccountUpdateType &type) noexcept
 {
+    if (text.starts_with(R"({"id":)"))
+    {
+        const bool parsed = parsing::detail::okx_parse_reply(text, m_reply);
+        if (!parsed) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Error>("okx account streamer reply parse failed: {}", text);
+            return false;
+        }
+
+        type = AccountUpdateType::Reply;
+        return true;
+    }
+
     std::string_view channel;
     if (!parsing::detail::okx_parse_channel(text, channel))
     {
@@ -354,7 +440,7 @@ bool OkxAccountStreamer::extract(std::string_view text, AccountUpdateType &type)
 
     if (channel == "positions")
     {
-        const bool parsed = parsing::detail::okx_parse_positions_push(text, m_positions, m_positions_size);
+        const bool parsed = parsing::detail::okx_parse_positions_push(text, m_positions, m_positions_size, m_snapshot);
         if (!parsed) [[unlikely]]
         {
             m_log.log<logging::LogLevel::Error>("okx account streamer positions parse failed: {}", text);

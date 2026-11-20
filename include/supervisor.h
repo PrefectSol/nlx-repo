@@ -6,6 +6,7 @@
 #include "core/thread.h"
 #include "exchange/okx_account_streamer.h"
 #include "exchange/okx_candle_streamer.h"
+#include "exchange/okx_endpoints.h"
 #include "exchange/okx_http_client.h"
 #include "exchange/okx_market_streamer.h"
 #include "exchange/okx_rate_limiter.h"
@@ -13,6 +14,7 @@
 #include "logging/logger_registry.h"
 #include "service/account.h"
 #include "service/market.h"
+#include "service/model.h"
 #include "service/screener.h"
 #include "service/strategy.h"
 
@@ -46,6 +48,7 @@ private:
     service::Account<exchange::OkxAccountStreamer> m_okx_account;
     service::Market<exchange::OkxMarketStreamer> m_okx_market;
     service::Screener<exchange::OkxCandleStreamer> m_okx_screener;
+    service::Model m_model;
     service::Strategy m_strategy;
 
     thread::Thread m_logger_thread;
@@ -53,6 +56,7 @@ private:
     thread::Thread m_okx_account_thread;
     thread::Thread m_okx_market_thread;
     thread::Thread m_okx_screener_thread;
+    thread::Thread m_model_thread;
     thread::Thread m_strategy_thread;
 
     FileDescriptor m_epoll;

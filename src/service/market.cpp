@@ -9,9 +9,9 @@ namespace nlx::service
 {
 
 template<typename Streamer>
-Market<Streamer>::Market(exchange::OkxRateLimiter &limiter, logging::LoggerRegistry &registry) :
+Market<Streamer>::Market(exchange::OkxRateLimiter &limiter, const char *url, size_t clock_milliseconds, logging::LoggerRegistry &registry) :
     m_log(),
-    m_streamer(limiter, m_log),
+    m_streamer(limiter, url, clock_milliseconds, m_log),
     m_epoll(),
     m_stop(),
     m_command(),
@@ -22,7 +22,13 @@ Market<Streamer>::Market(exchange::OkxRateLimiter &limiter, logging::LoggerRegis
     m_commands(),
     m_events(),
     m_slots(),
-    m_second(0)
+    m_second(0),
+    m_ticks(0),
+    m_loop(),
+    m_receive(),
+    m_delivery(),
+    m_close(),
+    m_updates(0)
 {
     m_log = registry.create_node("okx_market");
 
@@ -61,10 +67,15 @@ void Market<Streamer>::start() noexcept
     m_streamer.heartbeat();
     receive();
 
+    m_loop.reset(time::now_monotonic());
+
     epoll_event event{};
     while (true)
     {
+        m_loop.sleep(time::now_monotonic());
         const size_t count = detail::epoll_wait(m_epoll, { &event, 1 }, -1);
+        m_loop.wake(time::now_monotonic());
+
         if (count == 0)
         {
             continue;
@@ -72,7 +83,9 @@ void Market<Streamer>::start() noexcept
 
         if (event.data.fd == m_streamer.fd()) [[likely]]
         {
+            const nanoseconds begin = time::now_monotonic();
             receive();
+            m_receive.record(time::now_monotonic() - begin);
         }
         else if (event.data.fd == m_command)
         {
@@ -207,7 +220,31 @@ void Market<Streamer>::tick() noexcept
         }
     }
 
+    ++m_ticks;
+    if (m_ticks % kMetricsTicks == 0)
+    {
+        report();
+    }
+
     m_log.flush();
+}
+
+template<typename Streamer>
+void Market<Streamer>::report() noexcept
+{
+    const nanoseconds now = time::now_monotonic();
+
+    m_log.log<logging::LogLevel::Metric>("market metrics: utilization = {} %, wakeups = {}, updates = {}, receive p50 = {} us, p99 = {} us, max = {} us",
+              m_loop.utilization(now), m_loop.wakeups(), m_updates, m_receive.percentile(0.5), m_receive.percentile(0.99), m_receive.max());
+    m_log.log<logging::LogLevel::Metric>("market metrics: delivery p50 = {} ms, p99 = {} ms, bar close p50 = {} ms, p99 = {} ms, max = {} ms, bars = {}",
+              m_delivery.percentile(0.5) / 1000.0, m_delivery.percentile(0.99) / 1000.0, m_close.percentile(0.5) / 1000.0,
+              m_close.percentile(0.99) / 1000.0, m_close.max() / 1000.0, m_close.count());
+
+    m_loop.reset(now);
+    m_receive.reset();
+    m_delivery.reset();
+    m_close.reset();
+    m_updates = 0;
 }
 
 template<typename Streamer>
@@ -221,6 +258,9 @@ void Market<Streamer>::receive() noexcept
             fail(update.slot, "feed");
             continue;
         }
+
+        ++m_updates;
+        m_delivery.record(time::now() - milliseconds(update.timestamp));
 
         advance(update.timestamp);
 
@@ -353,10 +393,17 @@ void Market<Streamer>::advance(int64_t timestamp) noexcept
         return;
     }
 
+    const bool crossed = m_second < second;
+
     while (m_second < second)
     {
         finish(m_second);
         ++m_second;
+    }
+
+    if (crossed)
+    {
+        m_close.record(time::now() - seconds(second));
     }
 }
 

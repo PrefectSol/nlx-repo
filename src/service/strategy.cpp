@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <numeric>
 #include <optional>
@@ -25,16 +26,22 @@ constexpr std::string_view stage_name(uint8_t stage) noexcept
     return stage < names.size() ? names[stage] : "unknown";
 }
 
+std::string_view okx_message(const network::HttpRequest &request, int code) noexcept
+{
+    return code > 0 ? parsing::detail::okx_parse_message({ request.buffer, request.size }) : std::string_view();
+}
+
 } // namespace
 
 Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::OkxCandleStreamer> &okx_screener,
                    Market<exchange::OkxMarketStreamer> &okx_market, Account<exchange::OkxAccountStreamer> &okx_account,
-                   logging::LoggerRegistry &registry) :
+                   Model &model, logging::LoggerRegistry &registry) :
     m_log(),
     m_okx_http_client(okx_http_client),
     m_okx_screener(okx_screener),
     m_okx_market(okx_market),
     m_okx_account(okx_account),
+    m_model(model),
     m_epoll(),
     m_stop(),
     m_update(),
@@ -43,6 +50,7 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_okx_candles_epoll(),
     m_okx_candles_notify(),
     m_okx_episodes_notify(),
+    m_model_notify(),
     m_initialized(false),
     m_stopping(false),
     m_last_reinstruments(0),
@@ -56,6 +64,15 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     m_histories(),
     m_requests(),
     m_buffers(),
+    m_backlogs(),
+    m_inputs(),
+    m_states(),
+    m_outputs(),
+    m_loop(),
+    m_bar_delay(),
+    m_model_trip(),
+    m_decision_delay(),
+    m_ticks(0),
     m_opened(0),
     m_active(0),
     m_signals(),
@@ -77,6 +94,12 @@ Strategy::Strategy(exchange::OkxHttpClient &okx_http_client, Screener<exchange::
     }
 
     for (FileDescriptor &notify : m_okx_episodes_notify)
+    {
+        notify = FileDescriptor::make_eventfd(true);
+        detail::epoll_add(m_epoll, notify);
+    }
+
+    for (FileDescriptor &notify : m_model_notify)
     {
         notify = FileDescriptor::make_eventfd(true);
         detail::epoll_add(m_epoll, notify);
@@ -104,7 +127,7 @@ void Strategy::initialize()
     bool result = okx_get_system_time(request, code, timestamp);
     if (!result)
     {
-        throw std::runtime_error(std::format("okx get time request failed: http = {}, code = {}", request.code, code));
+        throw std::runtime_error(std::format("okx get time request failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
     }
 
     const std::array<char, time::iso8601_ms_size> servertime = detail::format_iso8601_ms(timestamp);
@@ -118,7 +141,7 @@ void Strategy::initialize()
     result = okx_get_account_config(request, code, uid, mode, hedge, trade);
     if (!result)
     {
-        throw std::runtime_error(std::format("okx authorization failed: http = {}, code = {}", request.code, code));
+        throw std::runtime_error(std::format("okx authorization failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
     }
 
     m_log.log("okx uid = {}", uid);
@@ -131,7 +154,7 @@ void Strategy::initialize()
     result = okx_get_positions(request, code, positions);
     if (!result)
     {
-        throw std::runtime_error(std::format("okx get positions request failed: http = {}, code = {}", request.code, code));
+        throw std::runtime_error(std::format("okx get positions request failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
     }
 
     m_log.log("okx open positions = {}", positions);
@@ -146,7 +169,7 @@ void Strategy::initialize()
     result = okx_get_orders(request, code, orders);
     if (!result)
     {
-        throw std::runtime_error(std::format("okx get orders request failed: http = {}, code = {}", request.code, code));
+        throw std::runtime_error(std::format("okx get orders request failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
     }
 
     m_log.log("okx open orders = {}", orders);
@@ -162,7 +185,7 @@ void Strategy::initialize()
         result = okx_set_futures_mode(request, code);
         if (!result)
         {
-            throw std::runtime_error(std::format("okx set account futures mode failed: http = {}, code = {}", request.code, code));
+            throw std::runtime_error(std::format("okx set account futures mode failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
         }
 
         m_log.log("okx account futures mode enabled");
@@ -174,7 +197,7 @@ void Strategy::initialize()
         result = okx_set_hedge_mode(request, code);
         if (!result)
         {
-            throw std::runtime_error(std::format("okx set hedge mode failed: http = {}, code = {}", request.code, code));
+            throw std::runtime_error(std::format("okx set hedge mode failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
         }
 
         m_log.log("okx account hedge mode enabled");
@@ -184,7 +207,7 @@ void Strategy::initialize()
     result = okx_get_fees(request, code, m_fees, m_fees_size);
     if (!result || m_fees_size == 0)
     {
-        throw std::runtime_error(std::format("okx get trade fee request failed: http = {}, code = {}", request.code, code));
+        throw std::runtime_error(std::format("okx get trade fee request failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
     }
 
     for (size_t index = 0; index < m_fees_size; ++index)
@@ -199,7 +222,7 @@ void Strategy::initialize()
     result = okx_get_balance(request, code, "USDT", balance);
     if (!result)
     {
-        throw std::runtime_error(std::format("okx get balance request failed: http = {}, code = {}", request.code, code));
+        throw std::runtime_error(std::format("okx get balance request failed: http = {}, code = {}, message = {}", request.code, code, okx_message(request, code)));
     }
 
     m_log.log("okx balance: equity = {}, available = {}, isolated pnl = {}", balance.equity, balance.available, balance.isolated_pnl);
@@ -212,6 +235,13 @@ void Strategy::initialize()
     {
         m_log.log<logging::LogLevel::Warning>("okx balance is empty: episodes will be rejected");
         m_log.flush();
+    }
+
+    const bool fits = m_model.input_size() <= kModelInputCapacity && m_model.state_size() <= kModelStateCapacity && m_model.output_size() <= kModelOutputCapacity;
+    if (m_model.ready() && !fits)
+    {
+        throw std::runtime_error(std::format("model does not fit strategy buffers: input = {}, state = {}, output = {}",
+                                             m_model.input_size(), m_model.state_size(), m_model.output_size()));
     }
 
     m_last_reinstruments = time::now_monotonic() - minutes(kInstrumentsRefreshMinutes) - detail::ceil_minutes(milliseconds(kUpdateMilliseconds));
@@ -233,12 +263,18 @@ void Strategy::start() noexcept
     m_log.log("cascade: signals = {}, minutes = {}", kCascadeSignals, kCascadeMinutes);
     m_log.log("episodes: capacity = {}, minutes = {}, warmup minutes = {}, history bars = {}, leverage = {}",
               kEpisodesCapacity, kEpisodeMinutes, kWarmupMinutes, kHistoryBars, kLeverage);
+    m_log.log("decisions: model = {}, hold seconds = {}, orders = market", m_model.ready(), kDecisionSeconds);
     m_log.flush();
+
+    m_loop.reset(time::now_monotonic());
 
     epoll_event event{};
     while (true)
     {
+        m_loop.sleep(time::now_monotonic());
         const size_t count = detail::epoll_wait(m_epoll, { &event, 1 }, -1);
+        m_loop.wake(time::now_monotonic());
+
         if (m_stopping.load(std::memory_order_acquire))
         {
             break;
@@ -253,6 +289,15 @@ void Strategy::start() noexcept
         {
             [[maybe_unused]] const uint64_t result = detail::drain(m_okx_market.events());
             okx_market();
+        }
+
+        for (size_t slot = 0; slot < kEpisodesCapacity; ++slot)
+        {
+            if (event.data.fd == m_model_notify[slot])
+            {
+                [[maybe_unused]] const uint64_t result = detail::drain(m_model_notify[slot]);
+                okx_inferred(slot);
+            }
         }
 
         for (size_t slot = 0; slot < kEpisodesCapacity; ++slot)
@@ -328,12 +373,27 @@ void Strategy::tick() noexcept
     bool closed = false;
     for (size_t slot = 0; slot < kEpisodesCapacity; ++slot)
     {
-        const Episode &episode = m_episodes[slot];
+        Episode &episode = m_episodes[slot];
 
         const bool expired = episode.stage != Stage::Idle && now - episode.opened >= minutes(kEpisodeMinutes);
         if (expired)
         {
             okx_close_episode(slot, "expired");
+            closed = true;
+        }
+
+        const bool leveraging = episode.stage == Stage::LeverageLong || episode.stage == Stage::LeverageShort;
+        const bool due = leveraging && !episode.pending && episode.retry != nanoseconds::zero() && now >= episode.retry;
+        if (!due)
+        {
+            continue;
+        }
+
+        episode.retry = nanoseconds::zero();
+        if (!okx_episode_request(slot, episode.stage)) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Error>("okx {} set leverage retry rejected by http client", std::string_view(m_instruments[episode.instrument].id));
+            okx_close_episode(slot, "leverage");
             closed = true;
         }
     }
@@ -342,6 +402,29 @@ void Strategy::tick() noexcept
     {
         m_log.flush();
     }
+
+    ++m_ticks;
+    if (m_ticks % kMetricsTicks == 0)
+    {
+        report();
+    }
+}
+
+void Strategy::report() noexcept
+{
+    const nanoseconds now = time::now_monotonic();
+
+    m_log.log<logging::LogLevel::Metric>("strategy metrics: utilization = {} %, wakeups = {}, active = {}, bars = {}, bar delay p50 = {} ms, p99 = {} ms",
+              m_loop.utilization(now), m_loop.wakeups(), m_active, m_bar_delay.count(), m_bar_delay.percentile(0.5) / 1000.0, m_bar_delay.percentile(0.99) / 1000.0);
+    m_log.log<logging::LogLevel::Metric>("strategy metrics: model trips = {}, trip p50 = {} us, p99 = {} us, decisions = {}, decision delay p50 = {} ms, p99 = {} ms",
+              m_model_trip.count(), m_model_trip.percentile(0.5), m_model_trip.percentile(0.99), m_decision_delay.count(),
+              m_decision_delay.percentile(0.5) / 1000.0, m_decision_delay.percentile(0.99) / 1000.0);
+    m_log.flush();
+
+    m_loop.reset(now);
+    m_bar_delay.reset();
+    m_model_trip.reset();
+    m_decision_delay.reset();
 }
 
 void Strategy::okx_signals() noexcept
@@ -419,15 +502,65 @@ void Strategy::okx_account() noexcept
     AccountEvent event{};
     while (m_okx_account.pop(event))
     {
-        if (!event.connected)
+        if (event.type == AccountEventType::Balance)
+        {
+            m_balance = event.balance;
+            m_balance_at = time::now_monotonic();
+
+            continue;
+        }
+
+        if (event.type == AccountEventType::Disconnected)
         {
             m_balance_at = nanoseconds::zero();
             continue;
         }
 
-        m_balance = event.balance;
-        m_balance_at = time::now_monotonic();
+        Episode &episode = m_episodes[event.slot];
+        if (episode.id != event.episode) [[unlikely]]
+        {
+            continue;
+        }
+
+        if (event.type == AccountEventType::Released)
+        {
+            episode.executing = false;
+            episode.closing = false;
+            episode.held = Target::Flat;
+
+            m_log.log("okx episode released: slot = {}, episode = {}", event.slot, event.episode);
+            continue;
+        }
+
+        if (event.type == AccountEventType::Flat || (event.type == AccountEventType::Rejected && !event.closing))
+        {
+            episode.held = Target::Flat;
+        }
+
+        const bool restricted = event.type == AccountEventType::Rejected && event.code == 51155 && episode.stage != Stage::Idle;
+        if (restricted) [[unlikely]]
+        {
+            Instrument &instrument = m_instruments[episode.instrument];
+            instrument.restricted = true;
+
+            m_log.log<logging::LogLevel::Warning>("okx {} is restricted for this account, episode closed, instrument skipped until the next refresh",
+                                                  std::string_view(instrument.id));
+            okx_close_episode(event.slot, "restricted");
+        }
+
+        if (event.type == AccountEventType::Flat)
+        {
+            episode.closing = false;
+        }
+
+        if (event.type == AccountEventType::Filled)
+        {
+            m_log.log("okx episode fill: slot = {}, episode = {}, side = {}, closing = {}, filled = {}, price = {}",
+                      event.slot, event.episode, event.side == PositionSide::Long ? "long" : "short", event.closing, event.size, event.price);
+        }
     }
+
+    m_log.flush();
 }
 
 void Strategy::okx_open_episode(const ScreenerSignal &signal) noexcept
@@ -445,7 +578,7 @@ void Strategy::okx_open_episode(const ScreenerSignal &signal) noexcept
     {
         const Episode &episode = m_episodes[slot];
 
-        const bool free = episode.stage == Stage::Idle && !episode.pending;
+        const bool free = episode.stage == Stage::Idle && !episode.pending && !episode.executing && !episode.inferring;
         if (free)
         {
             break;
@@ -507,7 +640,20 @@ void Strategy::okx_open_episode(const ScreenerSignal &signal) noexcept
         return;
     }
 
+    if (instrument.code == 0) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx episode rejected: instrument has no instIdCode, orders are impossible, instrument = {}", id);
+        return;
+    }
+
+    if (instrument.restricted) [[unlikely]]
+    {
+        m_log.log("okx episode skipped: instrument is restricted for this account, instrument = {}", id);
+        return;
+    }
+
     Episode &episode = m_episodes[slot];
+    episode = Episode{};
     episode.id = ++m_opened;
     episode.instrument = index;
     episode.opened = now;
@@ -515,9 +661,12 @@ void Strategy::okx_open_episode(const ScreenerSignal &signal) noexcept
     episode.price = signal.close;
     episode.fee = commission;
     episode.leverage = order.leverage;
+    episode.size = order.size;
     episode.stage = Stage::Tiers;
 
     m_histories[slot].clear();
+    m_backlogs[slot] = Backlog{};
+    std::fill_n(m_states[slot], kModelStateCapacity, 0.0f);
     ++m_active;
 
     m_log.log("okx episode opened: slot = {}, episode = {}, instrument = {}, price = {}, budget = {}, active = {}",
@@ -560,10 +709,19 @@ void Strategy::okx_close_episode(size_t slot, std::string_view reason) noexcept
         m_log.log<logging::LogLevel::Error>("okx {} market unsubscribe rejected: command queue is full", id);
     }
 
+    const bool executing = episode.executing;
+
     episode.stage = Stage::Idle;
     episode.budget = 0.0;
+    episode.target = Target::Flat;
 
+    m_backlogs[slot] = Backlog{};
     --m_active;
+
+    if (executing && !okx_execute(slot, ExecutorCommandType::Release, Target::Flat)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} release not submitted: command queue is full, positions are closed on shutdown", id);
+    }
 
     if (!episode.pending)
     {
@@ -615,7 +773,7 @@ void Strategy::okx_episode_tiers(size_t slot, const network::HttpRequest &reques
 
     if (!result)
     {
-        m_log.log<logging::LogLevel::Error>("okx {} get position tiers request failed: http = {}, code = {}, tiers = {}", id, request.code, code, count);
+        m_log.log<logging::LogLevel::Error>("okx {} get position tiers request failed: http = {}, code = {}, message = {}, tiers = {}", id, request.code, code, okx_message(request, code), count);
         okx_close_episode(slot, "tiers");
 
         return;
@@ -636,6 +794,7 @@ void Strategy::okx_episode_tiers(size_t slot, const network::HttpRequest &reques
     }
 
     episode.leverage = order.leverage;
+    episode.size = order.size;
 
     m_log.log("okx {} minimum order: leverage = {}, size = {}, notional = {}, margin = {}, fees = {}, budget = {}",
               id, order.leverage, order.size, order.notional, order.margin, order.fees, episode.budget);
@@ -656,13 +815,34 @@ void Strategy::okx_episode_leverage(size_t slot, const network::HttpRequest &req
     const std::string_view side = longs ? "long" : "short";
 
     int code = -1;
+    double leverage = 0.0;
 
-    bool result = parsing::detail::okx_parse_code({ request.buffer, request.size }, code);
+    bool result = parsing::detail::okx_parse_leverage({ request.buffer, request.size }, code, leverage);
     result = result && request.code == 200 && code == 0;
+
+    const bool throttled = !result && (code == 50011 || request.code == 429) && episode.retries < 3;
+    if (throttled)
+    {
+        ++episode.retries;
+        episode.retry = time::now_monotonic() + milliseconds(kRetryMilliseconds);
+
+        m_log.log<logging::LogLevel::Warning>("okx {} set leverage throttled: side = {}, retry = {} in {} ms", id, side, episode.retries, kRetryMilliseconds);
+        return;
+    }
 
     if (!result)
     {
-        m_log.log<logging::LogLevel::Error>("okx {} set leverage {} failed: side = {}, http = {}, code = {}", id, episode.leverage, side, request.code, code);
+        m_log.log<logging::LogLevel::Error>("okx {} set leverage {} failed: side = {}, http = {}, code = {}, message = {}",
+                                            id, episode.leverage, side, request.code, code, okx_message(request, code));
+        okx_close_episode(slot, "leverage");
+
+        return;
+    }
+
+    const bool applied = std::abs(leverage - episode.leverage) < 0.01;
+    if (!applied) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} set leverage mismatch: side = {}, requested = {}, applied = {}", id, side, episode.leverage, leverage);
         okx_close_episode(slot, "leverage");
 
         return;
@@ -705,6 +885,28 @@ void Strategy::okx_episode_bar(size_t slot, const Bar &bar) noexcept
     }
 
     history.push(bar);
+
+    m_bar_delay.record(time::now() - milliseconds(bar.timestamp + 1000));
+
+    Backlog &backlog = m_backlogs[slot];
+    if (m_model.ready())
+    {
+        if (backlog.size == kPendingBars) [[unlikely]]
+        {
+            m_log.log<logging::LogLevel::Warning>("okx {} model backlog is full, the oldest bar is skipped", id);
+
+            backlog.head = (backlog.head + 1) % kPendingBars;
+            --backlog.size;
+        }
+
+        backlog.bars[(backlog.head + backlog.size) % kPendingBars] = bar;
+        ++backlog.size;
+
+        if (!episode.inferring)
+        {
+            okx_infer(slot);
+        }
+    }
 
     if (history.size() == 1)
     {
@@ -761,6 +963,161 @@ bool Strategy::okx_episode_request(size_t slot, Stage stage) noexcept
     return pushed;
 }
 
+void Strategy::okx_infer(size_t slot) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    Backlog &backlog = m_backlogs[slot];
+
+    if (backlog.size == 0 || episode.inferring)
+    {
+        return;
+    }
+
+    const Bar &bar = backlog.bars[backlog.head];
+    backlog.head = (backlog.head + 1) % kPendingBars;
+    --backlog.size;
+
+    const std::array<double, 7> fields = { bar.open, bar.high, bar.low, bar.close, bar.volume, bar.bid, bar.ask };
+
+    const size_t size = m_model.input_size();
+    for (size_t index = 0; index < size; ++index)
+    {
+        m_inputs[slot][index] = index < fields.size() ? static_cast<float>(fields[index]) : 0.0f;
+    }
+
+    const nanoseconds now = time::now_monotonic();
+
+    const ModelRequest request{ m_inputs[slot], m_states[slot], m_outputs[slot], &m_model_notify[slot], now };
+    if (!m_model.submit(request)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx model request rejected: slot = {}, queue is full", slot);
+        return;
+    }
+
+    episode.inferring = true;
+    episode.submitted = now;
+}
+
+void Strategy::okx_inferred(size_t slot) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    if (!episode.inferring) [[unlikely]]
+    {
+        return;
+    }
+
+    episode.inferring = false;
+    m_model_trip.record(time::now_monotonic() - episode.submitted);
+
+    if (episode.stage == Stage::Idle)
+    {
+        m_backlogs[slot] = Backlog{};
+        return;
+    }
+
+    if (episode.stage == Stage::Ready && m_backlogs[slot].size == 0)
+    {
+        okx_decide(slot);
+    }
+
+    okx_infer(slot);
+
+    m_log.flush();
+}
+
+void Strategy::okx_decide(size_t slot) noexcept
+{
+    Episode &episode = m_episodes[slot];
+
+    const float *const output = m_outputs[slot];
+    const size_t size = std::min<size_t>(m_model.output_size(), 3);
+
+    size_t best = 0;
+    for (size_t index = 1; index < size; ++index)
+    {
+        best = output[index] > output[best] ? index : best;
+    }
+
+    constexpr std::array<Target, 3> targets = { Target::Long, Target::Flat, Target::Short };
+    const Target target = size == 1 ? (output[0] > 0.0f ? Target::Long : Target::Short) : targets[best];
+
+    const nanoseconds now = time::now_monotonic();
+
+    if (target != episode.target)
+    {
+        m_log.log("okx episode target: slot = {}, episode = {}, target = {}, held = {}, outputs = {} {} {}", slot, episode.id,
+                  static_cast<int>(target), static_cast<int>(episode.held), output[0], size > 1 ? output[1] : 0.0f, size > 2 ? output[2] : 0.0f);
+        episode.target = target;
+    }
+
+    const bool settled = episode.acted == nanoseconds::zero() || now - episode.acted >= seconds(kDecisionSeconds);
+    if (!settled)
+    {
+        return;
+    }
+
+    const milliseconds closed(m_histories[slot].back().timestamp + 1000);
+
+    if (episode.closing)
+    {
+        return;
+    }
+
+    if (episode.held != Target::Flat && episode.held != target)
+    {
+        if (okx_execute(slot, ExecutorCommandType::Close, episode.held))
+        {
+            episode.closing = true;
+            episode.acted = now;
+            m_decision_delay.record(time::now() - closed);
+        }
+
+        return;
+    }
+
+    if (episode.held == Target::Flat && target != Target::Flat)
+    {
+        if (okx_execute(slot, ExecutorCommandType::Open, target))
+        {
+            episode.held = target;
+            episode.acted = now;
+            m_decision_delay.record(time::now() - closed);
+        }
+    }
+}
+
+bool Strategy::okx_execute(size_t slot, ExecutorCommandType type, Target target) noexcept
+{
+    Episode &episode = m_episodes[slot];
+    const Instrument &instrument = m_instruments[episode.instrument];
+
+    ExecutorCommand command{};
+    nlx::detail::str_assign(command.instrument, std::string_view(instrument.id));
+    command.slot = slot;
+    command.episode = episode.id;
+    command.code = instrument.code;
+    command.lot = instrument.lot_size;
+    command.tick = instrument.tick_size;
+    command.type = type;
+    command.side = target == Target::Short ? PositionSide::Short : PositionSide::Long;
+    command.order = OrderType::Market;
+    command.size = episode.size;
+    command.submitted = time::now_monotonic();
+
+    if (!m_okx_account.submit(command)) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Error>("okx {} executor command rejected: queue is full", std::string_view(instrument.id));
+        return false;
+    }
+
+    episode.executing = true;
+
+    m_log.log("okx episode command: slot = {}, episode = {}, type = {}, side = {}, size = {}, price = {}",
+              slot, episode.id, static_cast<int>(type), static_cast<int>(target), command.size, command.price);
+
+    return true;
+}
+
 size_t Strategy::find_instrument(std::string_view id) const noexcept
 {
     for (size_t index = 0; index < m_instruments_size; ++index)
@@ -813,7 +1170,8 @@ bool Strategy::okx_reinstruments() noexcept
     bool result = okx_get_instruments(request, code, since, instruments, "SWAP", "linear", "USDT", "1", listed, ignored);
     if (!result)
     {
-        m_log.log<logging::LogLevel::Error>("okx get instruments request failed: http = {}, code = {}", request.code, code);
+        m_log.log<logging::LogLevel::Error>("okx get instruments request failed: http = {}, code = {}, message = {}, size = {}, truncated = {}",
+                                            request.code, code, okx_message(request, code), request.size, request.truncated);
         m_log.flush();
 
         return false;
@@ -892,6 +1250,7 @@ bool Strategy::okx_load_liquidity(std::span<Instrument> instruments, millisecond
 
     size_t next = 0;
     size_t active = 0;
+    size_t retries = 0;
     bool failed = false;
 
     while (true)
@@ -950,6 +1309,23 @@ bool Strategy::okx_load_liquidity(std::span<Instrument> instruments, millisecond
 
         [[maybe_unused]] const uint64_t result = detail::drain(m_okx_candles_notify[slot]);
 
+        const bool throttled = !failed && requests[slot]->code == 429 && retries < 32;
+        if (throttled)
+        {
+            ++retries;
+
+            const std::string_view id(instruments[owners[slot]].id);
+            network::HttpRequest &request = requests[slot].emplace(buffers[slot], kCandlesCapacity - parsing::json_padding_size, 0, 0, false, m_okx_candles_notify[slot]);
+
+            if (m_okx_http_client.get_candles(request, id, "1Dutc", before, static_cast<uint32_t>(kLiquidityDays + 1)))
+            {
+                continue;
+            }
+
+            m_log.log<logging::LogLevel::Error>("okx {} get candles retry rejected by http client", id);
+            failed = true;
+        }
+
         if (!failed)
         {
             failed = !okx_check_liquidity(*requests[slot], instruments[owners[slot]], today, valid, liquid);
@@ -957,6 +1333,12 @@ bool Strategy::okx_load_liquidity(std::span<Instrument> instruments, millisecond
 
         requests[slot].reset();
         --active;
+    }
+
+    if (retries != 0) [[unlikely]]
+    {
+        m_log.log<logging::LogLevel::Warning>("okx liquidity candles throttled by the exchange and retried: retries = {}", retries);
+        m_log.flush();
     }
 
     return !failed;
@@ -978,7 +1360,7 @@ bool Strategy::okx_check_liquidity(const network::HttpRequest &request, Instrume
     {
         if (request.code != 200 || code <= 0)
         {
-            m_log.log<logging::LogLevel::Error>("okx {} get candles request failed: http = {}, code = {}", id, request.code, code);
+            m_log.log<logging::LogLevel::Error>("okx {} get candles request failed: http = {}, code = {}, message = {}", id, request.code, code, okx_message(request, code));
             m_log.flush();
 
             return false;

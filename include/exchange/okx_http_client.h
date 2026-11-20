@@ -50,7 +50,6 @@ private:
     using SlotMask = network::HttpClient::SlotMask;
 
     static constexpr char kUrl[] = "https://openapi.okx.com";
-    static constexpr bool kSimulated = false;
 
     static constexpr size_t kParametersCapacity = 256;
     static constexpr size_t kHeaderCapacity = 64;
@@ -99,6 +98,7 @@ private:
     char m_key[kHeaderCapacity];
     char m_passphrase[kHeaderCapacity];
     char m_simulated[kHeaderCapacity];
+    bool m_demo;
     char m_secret[Credentials::kApiFieldCapacity];
 
     std::array<Slot, network::HttpClient::transfers_size()> m_slots;

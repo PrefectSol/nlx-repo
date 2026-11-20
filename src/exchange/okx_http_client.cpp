@@ -48,6 +48,7 @@ OkxHttpClient::OkxHttpClient(const Credentials &credentials, OkxRateLimiter &lim
     m_key(),
     m_passphrase(),
     m_simulated(),
+    m_demo(credentials.okx_demo),
     m_secret(),
     m_slots(),
     m_busy(0),
@@ -70,7 +71,7 @@ OkxHttpClient::OkxHttpClient(const Credentials &credentials, OkxRateLimiter &lim
         throw std::invalid_argument("okx header api passphrase is too long");
     }
 
-    const auto simulated = std::format_to_n(m_simulated, sizeof(m_simulated) - 1, "x-simulated-trading: {}", static_cast<int>(kSimulated));
+    const auto simulated = std::format_to_n(m_simulated, sizeof(m_simulated) - 1, "x-simulated-trading: {}", static_cast<int>(m_demo));
     if (static_cast<size_t>(simulated.size) >= kHeaderCapacity) [[unlikely]]
     {
         throw std::invalid_argument("okx header simulated is too long");
@@ -119,7 +120,7 @@ void OkxHttpClient::start() noexcept
 
     m_log.log("okx http client started");
     m_log.log("okx rest api url: {}", kUrl);
-    m_log.log("okx simulated mode: {}", kSimulated);
+    m_log.log("okx simulated mode: {}", m_demo);
     m_log.flush();
 
     while (true)

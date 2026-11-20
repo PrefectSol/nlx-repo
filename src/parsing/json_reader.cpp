@@ -191,6 +191,47 @@ bool okx_parse_code(std::string_view json, int &code) noexcept
     return parse(json, code, data);
 }
 
+std::string_view okx_parse_message(std::string_view json) noexcept
+{
+    simdjson::dom::element root;
+    if (parser().parse(json.data(), json.size(), false).get(root) != simdjson::SUCCESS)
+    {
+        return {};
+    }
+
+    std::string_view message;
+
+    simdjson::dom::array data;
+    simdjson::dom::element entry;
+
+    const bool detailed = root["data"].get(data) == simdjson::SUCCESS && data.at(0).get(entry) == simdjson::SUCCESS;
+    if (detailed && read_text(entry, "sMsg", message) && !message.empty())
+    {
+        return message;
+    }
+
+    return read_text(root, "msg", message) ? message : std::string_view();
+}
+
+bool okx_parse_leverage(std::string_view json, int &code, double &leverage) noexcept
+{
+    simdjson::dom::array data;
+
+    const bool result = parse(json, code, data);
+    if (!result || code != 0)
+    {
+        return result;
+    }
+
+    simdjson::dom::element entry;
+    std::string_view text;
+
+    bool parsed = data.at(0).get(entry) == simdjson::SUCCESS;
+    parsed = parsed && read_text(entry, "lever", text);
+
+    return parsed && to_number(text, leverage);
+}
+
 bool okx_parse_time(std::string_view json, int &code, milliseconds &time) noexcept
 {
     simdjson::dom::array data;
@@ -511,8 +552,12 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
 
         if (!parsed)
         {
-            return false;
+            ++ignored;
+            continue;
         }
+
+        int64_t identifier = 0;
+        const bool coded = instrument["instIdCode"].get(identifier) == simdjson::SUCCESS;
 
         const bool eligible = currency == settle && type == contract_type && state == "live" && rule == "normal" && group == category && expiry.empty();
         if (!eligible)
@@ -523,7 +568,8 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
         int64_t list_time = 0;
         if (!to_number(listing, list_time))
         {
-            return false;
+            ++ignored;
+            continue;
         }
 
         if (milliseconds(list_time) > listed_before)
@@ -544,6 +590,8 @@ bool okx_parse_instruments(std::string_view json, int &code, std::string_view se
         converted = converted && to_number(lot, target.lot_size) && to_number(minimum, target.min_size) && to_number(tick, target.tick_size);
         converted = converted && to_number(maximum, target.max_limit_size) && to_number(leverage, target.max_leverage);
         converted = converted && to_number(fee, target.fee_group);
+
+        target.code = coded ? identifier : 0;
 
         if (!converted)
         {
@@ -867,13 +915,21 @@ bool okx_parse_account_push(std::string_view json, std::string_view currency, Ba
     return parsed && to_number(updated, timestamp) && read_balance(account, currency, balance);
 }
 
-bool okx_parse_positions_push(std::string_view json, std::span<Position> positions, size_t &count) noexcept
+bool okx_parse_positions_push(std::string_view json, std::span<Position> positions, size_t &count, bool &snapshot) noexcept
 {
+    simdjson::dom::element root;
     simdjson::dom::array data;
-    if (!parse_push(json, data))
+
+    bool loaded = parser().parse(json.data(), json.size(), false).get(root) == simdjson::SUCCESS;
+    loaded = loaded && root["data"].get(data) == simdjson::SUCCESS;
+
+    if (!loaded)
     {
         return false;
     }
+
+    std::string_view event;
+    snapshot = root["eventType"].get(event) == simdjson::SUCCESS && event == "snapshot";
 
     count = 0;
     for (const simdjson::dom::element position : data)
@@ -928,9 +984,15 @@ bool okx_parse_orders_push(std::string_view json, std::span<Order> orders, size_
         parsed = parsed && read_text(order, "side", target.side);
         parsed = parsed && read_text(order, "posSide", target.position);
         parsed = parsed && read_text(order, "state", target.state);
+        parsed = parsed && read_text(order, "ordType", target.type);
         parsed = parsed && read_amount(order, "sz", target.size);
         parsed = parsed && read_amount(order, "accFillSz", target.filled);
         parsed = parsed && read_amount(order, "avgPx", target.price);
+        parsed = parsed && read_amount(order, "fee", target.fee);
+        parsed = parsed && read_amount(order, "pnl", target.pnl);
+
+        std::string_view updated;
+        parsed = parsed && read_text(order, "uTime", updated) && to_number(updated, target.updated);
 
         if (!parsed)
         {
@@ -941,6 +1003,58 @@ bool okx_parse_orders_push(std::string_view json, std::span<Order> orders, size_
     }
 
     return true;
+}
+
+bool okx_parse_reply(std::string_view json, OrderReply &reply) noexcept
+{
+    simdjson::dom::element root;
+    if (parser().parse(json.data(), json.size(), false).get(root) != simdjson::SUCCESS)
+    {
+        return false;
+    }
+
+    reply = OrderReply{};
+
+    std::string_view code;
+    std::string_view message;
+
+    bool parsed = read_text(root, "op", reply.operation);
+    parsed = parsed && read_text(root, "code", code) && to_number(code, reply.code);
+
+    if (!parsed)
+    {
+        return false;
+    }
+
+    std::string_view received;
+    std::string_view sent;
+
+    const bool timed = read_text(root, "inTime", received) && read_text(root, "outTime", sent);
+    if (timed && (!to_number(received, reply.received) || !to_number(sent, reply.sent)))
+    {
+        return false;
+    }
+
+    reply.status = reply.code;
+
+    simdjson::dom::array data;
+    simdjson::dom::element entry;
+
+    const bool detailed = root["data"].get(data) == simdjson::SUCCESS && data.at(0).get(entry) == simdjson::SUCCESS;
+    if (!detailed)
+    {
+        const bool explained = read_text(root, "msg", message);
+        return !explained || string::safe_strcpy(reply.message, message.substr(0, sizeof(reply.message) - 1));
+    }
+
+    std::string_view status;
+
+    parsed = read_text(entry, "clOrdId", reply.client);
+    parsed = parsed && read_text(entry, "ordId", reply.id);
+    parsed = parsed && read_text(entry, "sCode", status) && to_number(status, reply.status);
+    parsed = parsed && read_text(entry, "sMsg", message);
+
+    return parsed && string::safe_strcpy(reply.message, message.substr(0, sizeof(reply.message) - 1));
 }
 
 } // namespace nlx::parsing::detail

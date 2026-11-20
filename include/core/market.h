@@ -14,6 +14,8 @@ struct Instrument
     char id[kIdCapacity];
     char family[kIdCapacity];
 
+    int64_t code;
+
     double contract_value;
     double contract_multiplier;
     double lot_size;
@@ -24,6 +26,7 @@ struct Instrument
 
     int fee_group;
     bool accepted;
+    bool restricted;
 };
 
 struct Candle
@@ -110,7 +113,8 @@ enum class AccountUpdateType : uint8_t
 {
     Balance,
     Positions,
-    Orders
+    Orders,
+    Reply
 };
 
 struct Position
@@ -133,10 +137,56 @@ struct Order
     char side[8];
     char position[8];
     char state[24];
+    char type[24];
 
     double size;
     double filled;
     double price;
+    double fee;
+    double pnl;
+
+    int64_t updated;
+};
+
+struct OrderReply
+{
+    char operation[24];
+    char client[Instrument::kIdCapacity];
+    char id[Instrument::kIdCapacity];
+    char message[160];
+
+    int code;
+    int status;
+
+    int64_t received;
+    int64_t sent;
+};
+
+enum class PositionSide : uint8_t
+{
+    Long,
+    Short
+};
+
+enum class OrderType : uint8_t
+{
+    Market,
+    Limit,
+    PostOnly,
+    Ioc
+};
+
+struct OrderTicket
+{
+    char client[Instrument::kIdCapacity];
+    char size[24];
+    char price[24];
+
+    int64_t instrument;
+
+    PositionSide position;
+    OrderType type;
+    bool buy;
 };
 
 } // namespace nlx

@@ -30,6 +30,8 @@ enum OkxRequest : size_t
     WebsocketBusinessSubscribe,
     WebsocketPublicSubscribe,
     WebsocketPrivateSubscribe,
+    WebsocketOrder,
+    WebsocketCancel,
     OkxRequestsSize
 };
 
@@ -87,7 +89,9 @@ private:
         { 3, seconds(1) },
         { 480, minutes(60) },
         { 480, minutes(60) },
-        { 480, minutes(60) }
+        { 480, minutes(60) },
+        { 60, seconds(2) },
+        { 60, seconds(2) }
     }};
 
     static constexpr std::array<uint32_t, OkxRequestsSize + 1> kOffsets = detail::offsets(kRules);

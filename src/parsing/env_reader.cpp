@@ -42,11 +42,27 @@ std::string_view EnvReader::get(std::string_view key) const
         throw std::invalid_argument(std::format("env key '{}' is empty", key));
     }
 
+    std::string_view value;
+    if (!find(key, value))
+    {
+        throw std::invalid_argument(std::format("env key '{}' not found", key));
+    }
+
+    return value;
+}
+
+bool EnvReader::contains(std::string_view key) const noexcept
+{
+    std::string_view value;
+    return !key.empty() && find(key, value);
+}
+
+bool EnvReader::find(std::string_view key, std::string_view &value) const noexcept
+{
     const std::string_view content(m_data + m_offset, m_size - m_offset);
     const size_t size = content.size();
 
     bool found = false;
-    std::string_view value;
 
     size_t pos = 0;
     while (pos < size)
@@ -88,12 +104,7 @@ std::string_view EnvReader::get(std::string_view key) const
         found = true;
     }
 
-    if (!found)
-    {
-        throw std::invalid_argument(std::format("env key '{}' not found", key));
-    }
-
-    return value;
+    return found;
 }
 
 } // namespace nlx::parsing
