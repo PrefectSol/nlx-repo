@@ -1,0 +1,3 @@
+[submodule "3rdparty/websocketclient-cpp"]
+	path = 3rdparty/websocketclient-cpp
+	url = https://github.com/rbeeli/websocketclient-cpp.git
