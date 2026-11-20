@@ -55,7 +55,13 @@ OkxHttpClient::OkxHttpClient(const Credentials &credentials, OkxRateLimiter &lim
     m_ready(0),
     m_launched(0),
     m_frozen(0),
-    m_thaw(nanoseconds::max())
+    m_thaw(nanoseconds::max()),
+    m_routes(),
+    m_loop(),
+    m_wait(),
+    m_throttled(0),
+    m_peak(0),
+    m_reported()
 {
     m_log = registry.create_node("okx_http");
 
@@ -123,6 +129,9 @@ void OkxHttpClient::start() noexcept
     m_log.log("okx simulated mode: {}", m_demo);
     m_log.flush();
 
+    m_reported = time::now_monotonic();
+    m_loop.reset(m_reported);
+
     while (true)
     {
         const milliseconds timeout = schedule();
@@ -130,7 +139,17 @@ void OkxHttpClient::start() noexcept
         m_http_client.perform();
         complete();
 
-        if (m_http_client.poll(timeout, m_stop))
+        const nanoseconds now = time::now_monotonic();
+        if (now - m_reported >= milliseconds(kMetricsMilliseconds))
+        {
+            report(now);
+        }
+
+        m_loop.sleep(time::now_monotonic());
+        const bool stopped = m_http_client.poll(timeout, m_stop);
+        m_loop.wake(time::now_monotonic());
+
+        if (stopped)
         {
             break;
         }
@@ -178,6 +197,7 @@ bool OkxHttpClient::push(const Route &route, network::HttpRequest &request, std:
     slot.route = &route;
     slot.request = &request;
     slot.size = static_cast<size_t>(tail.out - data);
+    slot.queued = time::now_monotonic();
 
     m_ready.fetch_or(bit(index), std::memory_order_release);
     m_http_client.wakeup();
@@ -296,12 +316,16 @@ milliseconds OkxHttpClient::schedule() noexcept
         {
             m_frozen |= bit(index);
             m_thaw = std::min(m_thaw, now + delay);
+            ++m_throttled;
 
             m_log.log("okx http {} throttled for {} ms", route.path, nlx::detail::ms(delay));
             continue;
         }
 
         m_launched |= bit(index);
+        m_wait.record(now - m_slots[index].queued);
+        m_peak = std::max(m_peak, static_cast<size_t>(std::popcount(m_launched)));
+
         dispatch(index);
     }
 
@@ -353,6 +377,11 @@ void OkxHttpClient::complete() noexcept
         const Route &route = *m_slots[index].route;
         network::HttpRequest &request = *m_slots[index].request;
 
+        RouteMetrics &metrics = m_routes[route.request];
+        metrics.trip.record(response.elapsed);
+        metrics.failures += request.code == -1 || request.code >= 400 ? 1 : 0;
+        metrics.limited += request.code == 429 ? 1 : 0;
+
         if (request.code == -1) [[unlikely]]
         {
             m_log.log<logging::LogLevel::Error>("okx http {} failed in {} ms: curl = {}, http = {}, {}",
@@ -387,6 +416,41 @@ void OkxHttpClient::complete() noexcept
 
         nlx::detail::notify(request.notify);
     }
+}
+
+void OkxHttpClient::report(nanoseconds now) noexcept
+{
+    m_log.log<logging::LogLevel::Metric>("okx http metrics: utilization = {} %, wakeups = {}, sent = {}, queue wait p50 = {} ms, p99 = {} ms, throttled = {}, in flight peak = {} of {}",
+                                         m_loop.utilization(now), m_loop.wakeups(), m_wait.count(), m_wait.percentile(0.5) / 1000.0,
+                                         m_wait.percentile(0.99) / 1000.0, m_throttled, m_peak, network::HttpClient::transfers_size());
+
+    const std::array<const Route *, HttpSetLeverage + 1> routes = { &kSystemTimeRoute, &kAccountConfigRoute, &kBalanceRoute, &kPositionsRoute,
+                                                                    &kPendingOrdersRoute, &kInstrumentsRoute, &kCandlesRoute, &kSetPositionModeRoute,
+                                                                    &kSetAccountModeRoute, &kTradeFeeRoute, &kPositionTiersRoute, &kSetLeverageRoute };
+
+    for (const Route *route : routes)
+    {
+        RouteMetrics &metrics = m_routes[route->request];
+        if (metrics.trip.count() == 0)
+        {
+            continue;
+        }
+
+        m_log.log<logging::LogLevel::Metric>("okx http route metrics: route = {}, requests = {}, rtt p50 = {} ms, p99 = {} ms, max = {} ms, failures = {}, rate limited = {}",
+                                             route->path, metrics.trip.count(), metrics.trip.percentile(0.5) / 1000.0, metrics.trip.percentile(0.99) / 1000.0,
+                                             metrics.trip.max() / 1000.0, metrics.failures, metrics.limited);
+        metrics.trip.reset();
+        metrics.failures = 0;
+        metrics.limited = 0;
+    }
+
+    m_log.flush();
+
+    m_loop.reset(now);
+    m_wait.reset();
+    m_throttled = 0;
+    m_peak = 0;
+    m_reported = now;
 }
 
 void OkxHttpClient::release() noexcept

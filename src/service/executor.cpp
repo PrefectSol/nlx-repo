@@ -341,7 +341,10 @@ void Executor<Streamer>::positions(std::span<const Position> positions, bool sna
 {
     if (snapshot)
     {
-        m_holdings.fill(Holding{});
+        for (Holding &holding : m_holdings)
+        {
+            holding.size = 0.0;
+        }
     }
 
     for (const Position &position : positions)
@@ -388,6 +391,14 @@ void Executor<Streamer>::positions(std::span<const Position> positions, bool sna
         holding->size = size;
         holding->price = position.price;
         holding->used = true;
+    }
+
+    for (Holding &holding : m_holdings)
+    {
+        if (holding.used && holding.size <= 0.0)
+        {
+            holding = Holding{};
+        }
     }
 
     for (size_t slot = 0; slot < kSlotsCapacity; ++slot)

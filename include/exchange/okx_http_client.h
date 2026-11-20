@@ -3,6 +3,7 @@
 
 #include "core/credentials.h"
 #include "core/file_descriptor.h"
+#include "core/metrics.h"
 #include "core/time.h"
 #include "exchange/okx_rate_limiter.h"
 #include "logging/logger_node.h"
@@ -53,6 +54,7 @@ private:
 
     static constexpr size_t kParametersCapacity = 256;
     static constexpr size_t kHeaderCapacity = 64;
+    static constexpr size_t kMetricsMilliseconds = 60000;
 
     struct Route
     {
@@ -71,6 +73,15 @@ private:
 
         char timestamp[kHeaderCapacity];
         char signature[kHeaderCapacity];
+
+        nanoseconds queued;
+    };
+
+    struct RouteMetrics
+    {
+        LatencyHistogram trip;
+        size_t failures;
+        size_t limited;
     };
 
     static constexpr Route kSystemTimeRoute{ HttpSystemTime, false, "/api/v5/public/time" };
@@ -110,6 +121,13 @@ private:
     SlotMask m_frozen;
     nanoseconds m_thaw;
 
+    std::array<RouteMetrics, HttpSetLeverage + 1> m_routes;
+    LoopMeter m_loop;
+    LatencyHistogram m_wait;
+    size_t m_throttled;
+    size_t m_peak;
+    nanoseconds m_reported;
+
     template<typename ...Args>
     bool push(const Route &route, network::HttpRequest &request, std::format_string<Args...> format, Args &&...args) noexcept;
 
@@ -120,6 +138,7 @@ private:
     void dispatch(size_t index) noexcept;
     void complete() noexcept;
     void release() noexcept;
+    void report(nanoseconds now) noexcept;
 };
 
 } // namespace nlx::exchange

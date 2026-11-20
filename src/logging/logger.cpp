@@ -9,9 +9,11 @@
 
 #include <linux/limits.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <format>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -70,8 +72,16 @@ Logger::Logger() :
     m_notify(),
     m_stop(),
     m_modules(),
-    m_registered(0)
+    m_registered(0),
+    m_self(),
+    m_loop(),
+    m_write(),
+    m_lag(),
+    m_bytes(0),
+    m_reported()
 {
+    nlx::detail::str_assign(m_self.name, std::string_view("logger"));
+
     m_epoll = FileDescriptor::make_epoll();
     m_notify = FileDescriptor::make_eventfd(true);
     m_stop = FileDescriptor::make_eventfd(true);
@@ -131,10 +141,16 @@ void Logger::start() noexcept
         NLX_FATAL("nlx::logging::Logger::start() called before initialize()");
     }
 
+    m_reported = time::now_monotonic();
+    m_loop.reset(m_reported);
+
     epoll_event event{};
     while (true)
     {
+        m_loop.sleep(time::now_monotonic());
         const size_t count = nlx::detail::epoll_wait(m_epoll, { &event, 1 }, kFlushMilliseconds);
+        m_loop.wake(time::now_monotonic());
+
         if (count != 0)
         {
             if (event.data.fd == m_stop)
@@ -147,6 +163,12 @@ void Logger::start() noexcept
         }
 
         drain_modules();
+
+        const nanoseconds now = time::now_monotonic();
+        if (now - m_reported >= milliseconds(kMetricsMilliseconds))
+        {
+            report(now);
+        }
     }
 
     drain_modules();
@@ -203,9 +225,13 @@ size_t Logger::drain_module(Module &module) noexcept
         assert(consumed);
     }
 
+    module.records += count;
+    module.peak = std::max(module.peak, count);
+
     const size_t dropped = module.channel.dropped.exchange(0, std::memory_order_relaxed);
     if (dropped != 0) [[unlikely]]
     {
+        module.dropped += dropped;
         write_dropped(module, dropped);
     }
 
@@ -291,11 +317,8 @@ void Logger::write_record(Module &module, const LogRecord &record) noexcept
 
     line.append(format.substr(begin));
 
-    const std::string_view text = line.finish();
-    if (!nlx::detail::writeTo(module.file, text.data(), text.size())) [[unlikely]]
-    {
-        NLX_FATAL("nlx::logging::Logger::write_record() detail::writeTo failed");
-    }
+    m_lag.record(time::now() - record.timestamp);
+    write(module, line.finish());
 }
 
 void Logger::write_dropped(const Module &module, size_t dropped) noexcept
@@ -316,6 +339,73 @@ void Logger::write_dropped(const Module &module, size_t dropped) noexcept
     {
         NLX_FATAL("nlx::logging::Logger::write_dropped() detail::writeTo failed");
     }
+}
+
+void Logger::write_text(Module &module, LogLevel level, std::string_view text) noexcept
+{
+    const nanoseconds now = time::now();
+
+    const nanoseconds interval = module.rotation + minutes(kRotationMinutes);
+    if (now >= interval) [[unlikely]]
+    {
+        rotate(module, now);
+    }
+
+    char date_buffer[kDateSize];
+    const std::string_view date = nlx::detail::format_time(date_buffer, kDateFormat, now);
+
+    string::BoundedLine<kLineSize> line;
+    line.append("[");
+    line.append(date);
+    line.append("] ");
+    line.append(level_nameblock(level));
+    line.append(" ");
+    line.append(text);
+
+    write(module, line.finish());
+}
+
+void Logger::write(Module &module, std::string_view text) noexcept
+{
+    const nanoseconds begin = time::now_monotonic();
+    if (!nlx::detail::writeTo(module.file, text.data(), text.size())) [[unlikely]]
+    {
+        NLX_FATAL("nlx::logging::Logger::write() detail::writeTo failed");
+    }
+
+    m_write.record(time::now_monotonic() - begin);
+    m_bytes += text.size();
+}
+
+void Logger::report(nanoseconds now) noexcept
+{
+    char buffer[kLineSize];
+
+    const auto total = std::format_to_n(buffer, sizeof(buffer),
+                                        R"(logger metrics: utilization = "{}" %, wakeups = "{}", lines = "{}", bytes = "{}", write p50 = "{}" us, p99 = "{}" us, max = "{}" us, )"
+                                        R"(lag p50 = "{}" us, p99 = "{}" us, max = "{}" us)",
+                                        m_loop.utilization(now), m_loop.wakeups(), m_write.count(), m_bytes, m_write.percentile(0.5),
+                                        m_write.percentile(0.99), m_write.max(), m_lag.percentile(0.5), m_lag.percentile(0.99), m_lag.max());
+    write_text(m_self, LogLevel::Metric, std::string_view(buffer, std::min(static_cast<size_t>(total.size), sizeof(buffer))));
+
+    for (size_t i = 0; i < m_registered; ++i)
+    {
+        Module &module = m_modules[i];
+
+        const auto line = std::format_to_n(buffer, sizeof(buffer), R"(logger module metrics: module = "{}", records = "{}", dropped = "{}", queue peak = "{}" of "{}")",
+                                           std::string_view(module.name), module.records, module.dropped, module.peak, LoggerChannel::kQueueCapacity);
+        write_text(m_self, LogLevel::Metric, std::string_view(buffer, std::min(static_cast<size_t>(line.size), sizeof(buffer))));
+
+        module.records = 0;
+        module.dropped = 0;
+        module.peak = 0;
+    }
+
+    m_loop.reset(now);
+    m_write.reset();
+    m_lag.reset();
+    m_bytes = 0;
+    m_reported = now;
 }
 
 void Logger::rotate(Module &module, nanoseconds timestamp) noexcept
